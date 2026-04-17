@@ -54,7 +54,7 @@ export default function Settings() {
                 <div className="serif text-6xl gradient-text" style={{ fontWeight: 500 }}>{user.credits}</div>
               </div>
               <div className="mt-2 text-sm text-[var(--text-2)]">Each message ≈ 1 credit. Refills reset monthly on paid plans.</div>
-              <button className="btn btn-primary mt-5 w-full" data-testid="upgrade-btn">
+              <button onClick={() => window.location.assign("/billing")} className="btn btn-primary mt-5 w-full" data-testid="upgrade-btn">
                 Buy credits <ArrowUpRight className="h-4 w-4" strokeWidth={1.8} />
               </button>
             </div>

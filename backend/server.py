@@ -3,10 +3,16 @@ FORGE — AI Full-Stack App Developer SaaS
 Backend powered by FastAPI + MongoDB + Claude Sonnet 4.5 + Emergent Auth.
 """
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import io
+import re
+import json
+import asyncio
+import zipfile
 import logging
 import uuid
 import httpx
@@ -16,6 +22,9 @@ from typing import List, Optional
 from datetime import datetime, timezone, timedelta
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+from emergentintegrations.payments.stripe.checkout import (
+    StripeCheckout, CheckoutSessionRequest
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -26,6 +35,18 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
 
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "")
+
+# Fixed subscription packages (defined server-side for security)
+# Stripe Checkout in one-time mode — each purchase tops up credits. Subscriptions
+# simulated via monthly-equivalent credit packs.
+PACKAGES = {
+    "studio":  {"name": "Studio",  "amount": 29.00, "credits": 2000,  "label": "Studio tier — 2,000 credits / month"},
+    "maison":  {"name": "Maison",  "amount": 99.00, "credits": 10000, "label": "Maison tier — 10,000 credits / month"},
+    "topup_small":  {"name": "Credit pack — small",  "amount": 10.00, "credits": 500,  "label": "500 credits"},
+    "topup_large":  {"name": "Credit pack — large",  "amount": 29.00, "credits": 2000, "label": "2,000 credits"},
+}
+
 
 # ----------------------- App --------------------------
 app = FastAPI(title="FORGE API")
@@ -39,6 +60,7 @@ class User(BaseModel):
     name: str
     picture: Optional[str] = None
     credits: int = 100
+    tier: str = "atelier"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -288,6 +310,269 @@ async def chat(project_id: str, payload: ChatRequest, user: User = Depends(get_c
     )
 
     return {"message": ai_doc}
+
+
+# ----------------------- Chat Streaming (SSE) ----------------------
+@api_router.post("/projects/{project_id}/chat/stream")
+async def chat_stream(project_id: str, payload: ChatRequest, user: User = Depends(get_current_user)):
+    """SSE endpoint that streams the assistant reply token-by-token.
+    We call the LLM once (emergentintegrations returns a full response) then stream
+    it word-by-word to give real-time UX. Both user + assistant messages are persisted."""
+    project = await db.projects.find_one(
+        {"project_id": project_id, "user_id": user.user_id}, {"_id": 0}
+    )
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if user.credits <= 0:
+        raise HTTPException(status_code=402, detail="Out of credits")
+
+    # Persist user message up-front
+    user_msg = Message(project_id=project_id, role="user", content=payload.content)
+    user_doc = user_msg.model_dump()
+    user_doc["created_at"] = user_doc["created_at"].isoformat()
+    await db.messages.insert_one(user_doc)
+    user_doc.pop("_id", None)
+
+    async def event_gen():
+        # Send initial user ack
+        yield f"event: user\ndata: {json.dumps(user_doc)}\n\n"
+
+        # Call LLM (full response, then chunk for streaming UX)
+        try:
+            history_cursor = db.messages.find({"project_id": project_id}, {"_id": 0}).sort("created_at", 1)
+            history = await history_cursor.to_list(200)
+
+            chat_client = LlmChat(
+                api_key=EMERGENT_LLM_KEY,
+                session_id=project_id,
+                system_message=SYSTEM_PROMPT,
+            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+
+            prompt = payload.content
+            if len([m for m in history if m["role"] == "user"]) <= 1:
+                preamble = f"[Project: {project['name']}]\n[Stack: {project.get('stack','react-fastapi')}]\n\n"
+                prompt = preamble + payload.content
+
+            reply = await chat_client.send_message(UserMessage(text=prompt))
+        except Exception as e:
+            logging.exception("LLM stream error")
+            reply = f"[FORGE Error] Unable to reach model: {str(e)[:200]}"
+
+        # Chunk by ~ whitespace groups for smooth streaming
+        tokens = re.findall(r"\s+|\S+", reply)
+        accumulated = ""
+        for tok in tokens:
+            accumulated += tok
+            yield f"event: token\ndata: {json.dumps({'t': tok})}\n\n"
+            await asyncio.sleep(0.012)
+
+        # Persist final assistant message
+        ai_msg = Message(project_id=project_id, role="assistant", content=reply)
+        ai_doc = ai_msg.model_dump()
+        ai_doc["created_at"] = ai_doc["created_at"].isoformat()
+        await db.messages.insert_one(ai_doc)
+        ai_doc.pop("_id", None)
+
+        await db.users.update_one({"user_id": user.user_id}, {"$inc": {"credits": -1}})
+        await db.projects.update_one(
+            {"project_id": project_id},
+            {"$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        yield f"event: done\ndata: {json.dumps({'message': ai_doc})}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    })
+
+
+# ----------------------- Project Export (ZIP) ----------------------
+_FENCE_RE = re.compile(r"```(\w+)?(?::([^\n]+))?\n([\s\S]*?)```")
+
+
+def _safe_filename(name: str, idx: int, lang: str) -> str:
+    if name:
+        name = name.strip().lstrip("/").replace("..", "_")
+        return name or f"snippet_{idx}.{lang or 'txt'}"
+    ext_map = {"jsx": "jsx", "tsx": "tsx", "js": "js", "ts": "ts",
+               "python": "py", "py": "py", "html": "html", "css": "css",
+               "json": "json", "md": "md", "bash": "sh", "sh": "sh"}
+    ext = ext_map.get((lang or "").lower(), "txt")
+    return f"snippet_{idx}.{ext}"
+
+
+@api_router.get("/projects/{project_id}/export")
+async def export_project(project_id: str, user: User = Depends(get_current_user)):
+    project = await db.projects.find_one(
+        {"project_id": project_id, "user_id": user.user_id}, {"_id": 0}
+    )
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    msgs = await db.messages.find(
+        {"project_id": project_id, "role": "assistant"}, {"_id": 0}
+    ).sort("created_at", 1).to_list(1000)
+
+    # Latest file wins (deduplicate by path)
+    files: dict[str, str] = {}
+    idx = 0
+    for m in msgs:
+        for match in _FENCE_RE.finditer(m.get("content", "")):
+            lang = match.group(1) or "txt"
+            path = match.group(2)
+            body = match.group(3)
+            idx += 1
+            files[_safe_filename(path, idx, lang)] = body
+
+    # Build README
+    readme = f"# {project['name']}\n\n{project.get('description','')}\n\n"
+    readme += f"Generated by FORGE on {datetime.now(timezone.utc).isoformat()}\n\n"
+    readme += f"Files: {len(files)}\n\n"
+    readme += "## File list\n\n"
+    readme += "\n".join(f"- `{p}`" for p in sorted(files.keys())) or "- (no generated files yet)"
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("README.md", readme)
+        for path, body in files.items():
+            zf.writestr(path, body)
+    buf.seek(0)
+
+    filename = re.sub(r"[^a-z0-9]+", "-", project["name"].lower()).strip("-") or "forge-project"
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}.zip"'},
+    )
+
+
+# ----------------------- Stripe Payments ----------------------
+def _stripe_client(request: Request) -> StripeCheckout:
+    host_url = str(request.base_url).rstrip("/")
+    webhook_url = f"{host_url}/api/webhook/stripe"
+    return StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+
+
+class CheckoutRequest(BaseModel):
+    package_id: str
+    origin_url: str
+
+
+@api_router.get("/payments/packages")
+async def list_packages():
+    return [{"package_id": k, **v} for k, v in PACKAGES.items()]
+
+
+@api_router.post("/payments/checkout")
+async def create_checkout(
+    payload: CheckoutRequest, request: Request, user: User = Depends(get_current_user)
+):
+    pkg = PACKAGES.get(payload.package_id)
+    if not pkg:
+        raise HTTPException(status_code=400, detail="Invalid package")
+
+    origin = payload.origin_url.rstrip("/")
+    success_url = f"{origin}/billing/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{origin}/settings?billing=cancelled"
+
+    stripe = _stripe_client(request)
+    checkout_req = CheckoutSessionRequest(
+        amount=float(pkg["amount"]),
+        currency="usd",
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={
+            "user_id": user.user_id,
+            "email": user.email,
+            "package_id": payload.package_id,
+            "credits": str(pkg["credits"]),
+        },
+    )
+    session = await stripe.create_checkout_session(checkout_req)
+
+    # Record pending transaction
+    await db.payment_transactions.insert_one({
+        "session_id": session.session_id,
+        "user_id": user.user_id,
+        "email": user.email,
+        "package_id": payload.package_id,
+        "amount": float(pkg["amount"]),
+        "currency": "usd",
+        "credits": pkg["credits"],
+        "payment_status": "pending",
+        "status": "initiated",
+        "credits_applied": False,
+        "metadata": checkout_req.metadata,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"url": session.url, "session_id": session.session_id}
+
+
+@api_router.get("/payments/status/{session_id}")
+async def checkout_status(session_id: str, request: Request, user: User = Depends(get_current_user)):
+    tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if tx["user_id"] != user.user_id:
+        raise HTTPException(status_code=403, detail="Not your transaction")
+
+    # If already processed, return cached status
+    if tx.get("credits_applied"):
+        return {"payment_status": tx.get("payment_status"), "status": tx.get("status"),
+                "credits_added": tx.get("credits", 0), "already_applied": True}
+
+    stripe = _stripe_client(request)
+    try:
+        status = await stripe.get_checkout_status(session_id)
+    except Exception as e:
+        logging.exception("Stripe status error")
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)[:160]}")
+
+    updates = {"payment_status": status.payment_status, "status": status.status}
+
+    # Apply credits idempotently on success
+    credits_added = 0
+    if status.payment_status == "paid" and not tx.get("credits_applied"):
+        credits_added = tx.get("credits", 0)
+        new_tier = tx["package_id"] if tx["package_id"] in ("studio", "maison") else None
+        user_updates = {"$inc": {"credits": credits_added}}
+        if new_tier:
+            user_updates["$set"] = {"tier": new_tier}
+        await db.users.update_one({"user_id": tx["user_id"]}, user_updates)
+        updates["credits_applied"] = True
+
+    await db.payment_transactions.update_one({"session_id": session_id}, {"$set": updates})
+    return {"payment_status": status.payment_status, "status": status.status,
+            "credits_added": credits_added, "already_applied": False}
+
+
+@api_router.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    body = await request.body()
+    signature = request.headers.get("Stripe-Signature", "")
+    stripe = _stripe_client(request)
+    try:
+        event = await stripe.handle_webhook(body, signature)
+    except Exception as e:
+        logging.exception("Stripe webhook error")
+        raise HTTPException(status_code=400, detail=f"Webhook error: {str(e)[:160]}")
+
+    if event.event_type == "checkout.session.completed" and event.payment_status == "paid":
+        tx = await db.payment_transactions.find_one({"session_id": event.session_id}, {"_id": 0})
+        if tx and not tx.get("credits_applied"):
+            credits_added = tx.get("credits", 0)
+            new_tier = tx["package_id"] if tx["package_id"] in ("studio", "maison") else None
+            user_updates = {"$inc": {"credits": credits_added}}
+            if new_tier:
+                user_updates["$set"] = {"tier": new_tier}
+            await db.users.update_one({"user_id": tx["user_id"]}, user_updates)
+            await db.payment_transactions.update_one(
+                {"session_id": event.session_id},
+                {"$set": {"credits_applied": True, "payment_status": event.payment_status,
+                          "status": "completed"}},
+            )
+    return {"received": True}
 
 
 # ----------------------- Templates ----------------------

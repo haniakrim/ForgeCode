@@ -10,6 +10,8 @@ import Dashboard from "./pages/Dashboard";
 import Project from "./pages/Project";
 import Templates from "./pages/Templates";
 import Settings from "./pages/Settings";
+import Billing from "./pages/Billing";
+import BillingSuccess from "./pages/BillingSuccess";
 import AuthCallback from "./pages/AuthCallback";
 
 function AppRouter() {
@@ -25,6 +27,8 @@ function AppRouter() {
       <Route path="/project/:id" element={<ProtectedRoute><Project /></ProtectedRoute>} />
       <Route path="/templates" element={<ProtectedRoute><Templates /></ProtectedRoute>} />
       <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+      <Route path="/billing" element={<ProtectedRoute><Billing /></ProtectedRoute>} />
+      <Route path="/billing/success" element={<ProtectedRoute><BillingSuccess /></ProtectedRoute>} />
     </Routes>
   );
 }

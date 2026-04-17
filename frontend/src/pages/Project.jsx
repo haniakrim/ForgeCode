@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
-import { ArrowLeft, Send, Loader2, Code2, Eye, FileCode2, Sparkles, Copy, CheckCheck } from "lucide-react";
+import { ArrowLeft, Send, Loader2, Code2, Eye, FileCode2, Sparkles, Copy, CheckCheck, Download } from "lucide-react";
 import { toast } from "sonner";
 
 // ------------- Code block parser -------------
@@ -89,17 +89,84 @@ export default function Project() {
     const text = input;
     setInput("");
     setSending(true);
-    setMessages((m) => [...m, { message_id: "tmp", role: "user", content: text, created_at: new Date().toISOString() }]);
+    const userTmp = { message_id: "tmp-u", role: "user", content: text, created_at: new Date().toISOString() };
+    const aiTmp = { message_id: "tmp-a", role: "assistant", content: "", created_at: new Date().toISOString() };
+    setMessages((m) => [...m, userTmp, aiTmp]);
+
     try {
-      const { data } = await api.post(`/projects/${id}/chat`, { content: text });
-      setMessages((m) => [...m.filter((x) => x.message_id !== "tmp"),
-        { role: "user", content: text, created_at: new Date().toISOString() }, data.message]);
-      refresh();
+      const resp = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/projects/${id}/chat/stream`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: text }),
+      });
+      if (!resp.ok || !resp.body) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.detail || "Chat failed");
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let streamed = "";
+
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // Parse SSE events separated by \n\n
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+        for (const ev of events) {
+          const lines = ev.split("\n");
+          let type = "message";
+          let data = "";
+          for (const l of lines) {
+            if (l.startsWith("event:")) type = l.slice(6).trim();
+            else if (l.startsWith("data:")) data += l.slice(5).trim();
+          }
+          if (!data) continue;
+          let parsed;
+          try { parsed = JSON.parse(data); } catch { continue; }
+          if (type === "token") {
+            streamed += parsed.t ?? "";
+            setMessages((m) => m.map((x) => x.message_id === "tmp-a" ? { ...x, content: streamed } : x));
+          } else if (type === "done") {
+            setMessages((m) => m.map((x) => {
+              if (x.message_id === "tmp-u") return { ...userTmp, message_id: "done-u" };
+              if (x.message_id === "tmp-a") return parsed.message;
+              return x;
+            }));
+            refresh();
+          }
+        }
+      }
     } catch (err) {
-      toast.error(err.response?.data?.detail || "Chat failed");
-      setMessages((m) => m.filter((x) => x.message_id !== "tmp"));
+      toast.error(err.message || "Chat failed");
+      setMessages((m) => m.filter((x) => x.message_id !== "tmp-u" && x.message_id !== "tmp-a"));
     } finally {
       setSending(false);
+    }
+  };
+
+  const downloadZip = async () => {
+    try {
+      const url = `${process.env.REACT_APP_BACKEND_URL}/api/projects/${id}/export`;
+      const resp = await fetch(url, { credentials: "include" });
+      if (!resp.ok) throw new Error("Export failed");
+      const blob = await resp.blob();
+      const cd = resp.headers.get("content-disposition") || "";
+      const fn = /filename="?([^"]+)"?/.exec(cd)?.[1] || "forge-project.zip";
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = fn;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      toast.success("Exported");
+    } catch (err) {
+      toast.error(err.message);
     }
   };
 
@@ -150,12 +217,21 @@ ReactDOM.createRoot(document.getElementById('root')).render(<_Root />);
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <span className="chip chip-emerald pulse-dot">active</span>
-            <span className="chip">claude sonnet 4.5</span>
+            <span className="chip chip-emerald pulse-dot hidden sm:inline-flex">active</span>
+            <span className="chip hidden md:inline-flex">claude sonnet 4.5</span>
             <div className="chip">
               <Sparkles className="h-3 w-3 text-[var(--brand)]" strokeWidth={1.5} />
               {user?.credits} credits
             </div>
+            <button
+              onClick={downloadZip}
+              data-testid="export-btn"
+              className="btn btn-ghost !py-1.5 !px-3 !text-xs"
+              title="Download project as ZIP"
+            >
+              <Download className="h-3.5 w-3.5" strokeWidth={1.8} />
+              <span className="hidden md:inline">Export</span>
+            </button>
           </div>
         </div>
       </div>

@@ -26,6 +26,7 @@ export const Navbar = ({ variant = "app" }) => {
               <>
                 <Link to="/dashboard" className="link" data-testid="nav-dashboard">Dashboard</Link>
                 <Link to="/templates" className="link" data-testid="nav-templates">Templates</Link>
+                <Link to="/billing" className="link" data-testid="nav-billing">Billing</Link>
                 <Link to="/settings" className="link" data-testid="nav-settings">Settings</Link>
               </>
             ) : (
