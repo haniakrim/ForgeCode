@@ -416,3 +416,17 @@ pre code { background: transparent; }
   width: 100% !important;
 }
 .sandpack-preview-wrap .sp-stack { height: 100% !important; }
+
+/* Daylight-optimized Sandpack chrome (refresh button, loader, errors) */
+.sp-daylight .sp-preview-actions { background: rgba(244, 239, 229, 0.85) !important; }
+.sp-daylight .sp-preview-container { background: #FBF7EE !important; }
+.sp-daylight .sp-loading { background: #FBF7EE !important; color: #0E0D0A !important; }
+.sp-daylight .sp-icon-standalone,
+.sp-daylight .sp-button { color: #0E0D0A !important; background: transparent !important; }
+.sp-daylight .sp-button:hover { background: rgba(14,13,10,0.05) !important; }
+.sp-daylight .sp-overlay,
+.sp-daylight .sp-error { background: rgba(244, 239, 229, 0.95) !important; color: #0E0D0A !important; }
+.sp-daylight .sp-error-message { color: #D94C04 !important; }
+
+.sp-noir .sp-preview-container { background: #0A0A0A !important; }
+.sp-noir .sp-loading { background: #0A0A0A !important; color: #D0CEC6 !important; }

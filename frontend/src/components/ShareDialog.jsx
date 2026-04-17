@@ -1,20 +1,24 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { Share2, Copy, CheckCheck, X, UserPlus, Globe, Lock, Trash2, Mail } from "lucide-react";
+import { Share2, Copy, CheckCheck, X, UserPlus, Globe, Lock, Trash2, Mail, Pencil, Eye } from "lucide-react";
 import { toast } from "sonner";
+
+const ROLES = [
+  { id: "editor", label: "Editor", icon: Pencil, hint: "Can chat & generate code" },
+  { id: "viewer", label: "Viewer", icon: Eye, hint: "Read-only access" },
+];
 
 export const ShareDialog = ({ project, members = [], onClose, onUpdate }) => {
   const [isPublic, setIsPublic] = useState(project.public || false);
   const [memberList, setMemberList] = useState(members);
   const [email, setEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("editor");
   const [inviting, setInviting] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const shareUrl = `${window.location.origin}/share/${project.project_id}`;
 
-  useEffect(() => {
-    setIsPublic(project.public || false);
-  }, [project.public]);
+  useEffect(() => { setIsPublic(project.public || false); }, [project.public]);
 
   const togglePublic = async () => {
     const next = !isPublic;
@@ -22,7 +26,7 @@ export const ShareDialog = ({ project, members = [], onClose, onUpdate }) => {
     try {
       const { data } = await api.patch(`/projects/${project.project_id}`, { public: next });
       onUpdate?.(data);
-      toast.success(next ? "Project is now public" : "Project is now private");
+      toast.success(next ? "Project is public" : "Project is private");
     } catch {
       toast.error("Failed to update");
       setIsPublic(!next);
@@ -41,12 +45,15 @@ export const ShareDialog = ({ project, members = [], onClose, onUpdate }) => {
     if (!email.trim()) return;
     setInviting(true);
     try {
-      const { data } = await api.post(`/projects/${project.project_id}/invite`, { email: email.trim().toLowerCase() });
+      const { data } = await api.post(`/projects/${project.project_id}/invite`, {
+        email: email.trim().toLowerCase(),
+        role: inviteRole,
+      });
       if (data.already_invited) {
         toast.info("Already invited");
       } else {
         setMemberList((m) => [...m, data]);
-        toast.success(`Invited ${email}`);
+        toast.success(`Invited ${email} as ${inviteRole}`);
       }
       setEmail("");
     } catch (err) {
@@ -54,6 +61,14 @@ export const ShareDialog = ({ project, members = [], onClose, onUpdate }) => {
     } finally {
       setInviting(false);
     }
+  };
+
+  const changeRole = async (member, role) => {
+    try {
+      const { data } = await api.patch(`/projects/${project.project_id}/members/${member.member_id}`, { role });
+      setMemberList((m) => m.map((x) => x.member_id === member.member_id ? data : x));
+      toast.success(`${member.email} is now a ${role}`);
+    } catch { toast.error("Failed to update role"); }
   };
 
   const remove = async (memberId) => {
@@ -66,11 +81,7 @@ export const ShareDialog = ({ project, members = [], onClose, onUpdate }) => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" onClick={onClose}>
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="glass-strong rounded-3xl w-full max-w-lg p-7"
-        data-testid="share-dialog"
-      >
+      <div onClick={(e) => e.stopPropagation()} className="glass-strong rounded-3xl w-full max-w-lg p-7" data-testid="share-dialog">
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="overline">Share</div>
@@ -84,11 +95,7 @@ export const ShareDialog = ({ project, members = [], onClose, onUpdate }) => {
         {/* Public toggle */}
         <div className="mt-6 rounded-xl border border-[var(--border)] bg-[var(--surface-2)] p-4 flex items-start gap-3">
           <div className="h-10 w-10 rounded-lg flex items-center justify-center border border-[var(--border)] bg-[var(--surface)]">
-            {isPublic ? (
-              <Globe className="h-4.5 w-4.5 text-[var(--brand)]" strokeWidth={1.8} />
-            ) : (
-              <Lock className="h-4.5 w-4.5 text-[var(--text-2)]" strokeWidth={1.8} />
-            )}
+            {isPublic ? <Globe className="h-4 w-4 text-[var(--brand)]" strokeWidth={1.8} /> : <Lock className="h-4 w-4 text-[var(--text-2)]" strokeWidth={1.8} />}
           </div>
           <div className="flex-1 min-w-0">
             <div className="font-medium flex items-center gap-2">
@@ -96,16 +103,11 @@ export const ShareDialog = ({ project, members = [], onClose, onUpdate }) => {
               {isPublic && <span className="chip chip-emerald !py-0.5">live</span>}
             </div>
             <div className="text-sm text-[var(--text-2)] mt-0.5">
-              {isPublic ? "Anyone with the link can view this project read-only." : "Only you and collaborators can see this project."}
+              {isPublic ? "Anyone with the link can view read-only." : "Only you and collaborators can see this project."}
             </div>
           </div>
-          <button
-            onClick={togglePublic}
-            data-testid="toggle-public"
-            role="switch"
-            aria-checked={isPublic}
-            className={`shrink-0 h-6 w-11 rounded-full border border-[var(--border)] relative transition-colors ${isPublic ? "bg-[var(--brand)]" : "bg-[var(--surface)]"}`}
-          >
+          <button onClick={togglePublic} data-testid="toggle-public" role="switch" aria-checked={isPublic}
+            className={`shrink-0 h-6 w-11 rounded-full border border-[var(--border)] relative transition-colors ${isPublic ? "bg-[var(--brand)]" : "bg-[var(--surface)]"}`}>
             <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${isPublic ? "left-6" : "left-0.5"}`} />
           </button>
         </div>
@@ -122,29 +124,32 @@ export const ShareDialog = ({ project, members = [], onClose, onUpdate }) => {
         {/* Collaborators */}
         <div className="mt-7">
           <div className="overline">Collaborators</div>
-          <div className="mt-1 text-sm text-[var(--text-2)]">Invite by email. They can chat, but only you can delete.</div>
+          <div className="mt-1 text-sm text-[var(--text-2)]">Invite by email. Editors can chat; Viewers are read-only.</div>
           <form onSubmit={invite} className="mt-3 flex gap-2">
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="teammate@example.com"
-              className="input"
-              data-testid="invite-email-input"
-            />
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+              placeholder="teammate@example.com" className="input flex-1" data-testid="invite-email-input" />
+            <select
+              value={inviteRole}
+              onChange={(e) => setInviteRole(e.target.value)}
+              data-testid="invite-role-select"
+              className="input !w-auto !pr-8 cursor-pointer"
+            >
+              {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+            </select>
             <button type="submit" disabled={inviting || !email.trim()} data-testid="invite-btn" className="btn btn-primary !px-4">
               <UserPlus className="h-4 w-4" strokeWidth={1.8} />
-              <span className="hidden sm:inline">Invite</span>
             </button>
           </form>
 
           <div className="mt-4 space-y-2">
             {memberList.length === 0 ? (
               <div className="text-xs text-[var(--text-3)] italic-serif">No collaborators yet.</div>
-            ) : (
-              memberList.map((m) => (
-                <div key={m.member_id} data-testid={`member-${m.member_id}`} className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2">
-                  <div className="flex items-center gap-2.5 min-w-0">
+            ) : memberList.map((m) => {
+              const R = ROLES.find((r) => r.id === (m.role || "editor")) || ROLES[0];
+              return (
+                <div key={m.member_id} data-testid={`member-${m.member_id}`}
+                  className="flex items-center justify-between rounded-xl border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 gap-2">
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <div className="h-7 w-7 rounded-full bg-gradient-to-br from-[var(--brand)] to-[var(--gold)] flex items-center justify-center text-xs text-white font-bold">
                       {m.email[0]?.toUpperCase()}
                     </div>
@@ -153,17 +158,27 @@ export const ShareDialog = ({ project, members = [], onClose, onUpdate }) => {
                       <span className="truncate">{m.email}</span>
                     </div>
                   </div>
-                  <button onClick={() => remove(m.member_id)} data-testid={`remove-${m.member_id}`} className="rounded-full border border-[var(--border)] p-1.5 hover:border-[var(--brand)]" aria-label="Remove">
+                  <select
+                    value={m.role || "editor"}
+                    onChange={(e) => changeRole(m, e.target.value)}
+                    data-testid={`role-${m.member_id}`}
+                    className="bg-[var(--surface)] border border-[var(--border)] rounded-full text-xs px-2.5 py-1 cursor-pointer outline-none focus:border-[var(--brand)]"
+                    title={R.hint}
+                  >
+                    {ROLES.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+                  </select>
+                  <button onClick={() => remove(m.member_id)} data-testid={`remove-${m.member_id}`}
+                    className="rounded-full border border-[var(--border)] p-1.5 hover:border-[var(--brand)]" aria-label="Remove">
                     <Trash2 className="h-3 w-3 text-[var(--text-2)]" strokeWidth={1.8} />
                   </button>
                 </div>
-              ))
-            )}
+              );
+            })}
           </div>
         </div>
 
         <div className="mt-6 text-xs text-[var(--text-3)] text-center mono">
-          <Share2 className="inline h-3 w-3 mr-1" strokeWidth={1.8} /> share links show read-only view · collaborators can chat
+          <Share2 className="inline h-3 w-3 mr-1" strokeWidth={1.8} /> public links = read-only · editors chat · viewers watch
         </div>
       </div>
     </div>

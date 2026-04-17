@@ -72,7 +72,14 @@ export default function Project() {
   const [tab, setTab] = useState("code");
   const [shareOpen, setShareOpen] = useState(false);
   const [members, setMembers] = useState([]);
+  const [presence, setPresence] = useState([]);
+  const [typingUsers, setTypingUsers] = useState({}); // user_id -> name
   const scrollRef = useRef(null);
+  const wsRef = useRef(null);
+  const typingDebounceRef = useRef(null);
+
+  const isViewer = project?.role === "collaborator" && project?.member_role === "viewer";
+  const isOwner = project?.role === "owner";
 
   const load = async () => {
     try {
@@ -87,6 +94,59 @@ export default function Project() {
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [id]);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [messages]);
+
+  // WebSocket: presence + typing + real-time message broadcasts
+  useEffect(() => {
+    if (!id || !user) return;
+    const backend = process.env.REACT_APP_BACKEND_URL || "";
+    const wsUrl = backend.replace(/^http/, "ws") + `/api/ws/projects/${id}`;
+    let pingInterval;
+
+    const socket = new WebSocket(wsUrl);
+    wsRef.current = socket;
+    socket.onopen = () => {
+      pingInterval = setInterval(() => {
+        try { socket.send(JSON.stringify({ type: "ping" })); } catch {/* closed */}
+      }, 30000);
+    };
+    socket.onmessage = (ev) => {
+      try {
+        const m = JSON.parse(ev.data);
+        if (m.type === "error") { socket.close(); return; }
+        if (m.type === "presence") setPresence(m.users || []);
+        else if (m.type === "typing") {
+          setTypingUsers((prev) => {
+            const next = { ...prev };
+            if (m.is_typing) next[m.user_id] = m.name; else delete next[m.user_id];
+            return next;
+          });
+        } else if (m.type === "message") {
+          setMessages((list) => list.find((x) => x.message_id === m.message.message_id) ? list : [...list, m.message]);
+        }
+      } catch {/* ignore malformed */}
+    };
+    socket.onclose = () => { clearInterval(pingInterval); };
+    socket.onerror = () => { try { socket.close(); } catch {/* already closed */} };
+
+    return () => {
+      clearInterval(pingInterval);
+      try { socket.close(); } catch {/* already closed */}
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, user?.user_id]);
+
+  const sendTyping = (isTyping) => {
+    try {
+      wsRef.current?.send(JSON.stringify({ type: "typing", is_typing: isTyping }));
+    } catch {/* not connected */}
+  };
+
+  const handleInputChange = (e) => {
+    setInput(e.target.value);
+    if (typingDebounceRef.current) clearTimeout(typingDebounceRef.current);
+    sendTyping(true);
+    typingDebounceRef.current = setTimeout(() => sendTyping(false), 2500);
+  };
 
   const send = async (e) => {
     e?.preventDefault();
@@ -208,6 +268,31 @@ export default function Project() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Live presence avatars */}
+            {presence.length > 1 && (
+              <div className="flex items-center -space-x-2 mr-1" data-testid="presence-avatars">
+                {presence.slice(0, 4).map((p) => (
+                  <div
+                    key={p.user_id}
+                    title={`${p.name} · ${p.role}`}
+                    className="relative h-6 w-6 rounded-full border-2 border-[var(--bg)] bg-gradient-to-br from-[var(--brand)] to-[var(--gold)] flex items-center justify-center text-[10px] text-white font-bold overflow-hidden"
+                  >
+                    {p.picture ? (
+                      <img src={p.picture} alt={p.name} className="h-full w-full object-cover" />
+                    ) : (
+                      (p.name || p.email)[0]?.toUpperCase()
+                    )}
+                  </div>
+                ))}
+                {presence.length > 4 && (
+                  <div className="h-6 w-6 rounded-full border-2 border-[var(--bg)] bg-[var(--surface)] flex items-center justify-center text-[10px] text-[var(--text-2)]">
+                    +{presence.length - 4}
+                  </div>
+                )}
+                <span className="chip chip-emerald !py-0.5 ml-2 pulse-dot">{presence.length} live</span>
+              </div>
+            )}
+            {isViewer && <span className="chip">viewer</span>}
             <span className="chip chip-emerald pulse-dot hidden sm:inline-flex">active</span>
             <span className="chip hidden md:inline-flex">claude sonnet 4.5</span>
             <div className="chip">
@@ -223,7 +308,7 @@ export default function Project() {
               <Download className="h-3.5 w-3.5" strokeWidth={1.8} />
               <span className="hidden md:inline">Export</span>
             </button>
-            {project.role !== "collaborator" && (
+            {isOwner && (
               <button
                 onClick={() => setShareOpen(true)}
                 data-testid="share-btn"
@@ -263,17 +348,28 @@ export default function Project() {
             )}
           </div>
           <form onSubmit={send} className="border-t border-[var(--border)] p-4 bg-[var(--surface)]" data-testid="chat-form">
+            {Object.keys(typingUsers).length > 0 && (
+              <div className="flex items-center gap-2 mb-2 px-1 text-xs text-[var(--text-2)] italic-serif" data-testid="typing-indicator">
+                <span className="inline-flex gap-0.5">
+                  <span className="h-1 w-1 rounded-full bg-[var(--brand)] animate-bounce" style={{ animationDelay: "0ms" }} />
+                  <span className="h-1 w-1 rounded-full bg-[var(--brand)] animate-bounce" style={{ animationDelay: "150ms" }} />
+                  <span className="h-1 w-1 rounded-full bg-[var(--brand)] animate-bounce" style={{ animationDelay: "300ms" }} />
+                </span>
+                {Object.values(typingUsers).join(", ")} {Object.keys(typingUsers).length === 1 ? "is" : "are"} typing…
+              </div>
+            )}
             <div className="glass rounded-2xl p-2 flex items-end gap-2">
               <textarea
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-                placeholder="Describe changes, features, fixes..."
+                placeholder={isViewer ? "Viewers are read-only." : "Describe changes, features, fixes..."}
                 rows={2}
+                disabled={isViewer}
                 data-testid="chat-input"
-                className="flex-1 bg-transparent border-0 outline-none resize-none px-3 py-2 text-[15px] placeholder:text-[var(--text-3)]"
+                className="flex-1 bg-transparent border-0 outline-none resize-none px-3 py-2 text-[15px] placeholder:text-[var(--text-3)] disabled:cursor-not-allowed disabled:opacity-60"
               />
-              <button type="submit" disabled={sending || !input.trim()} data-testid="send-btn" className="btn btn-primary !rounded-xl self-stretch !px-4">
+              <button type="submit" disabled={sending || !input.trim() || isViewer} data-testid="send-btn" className="btn btn-primary !rounded-xl self-stretch !px-4">
                 {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" strokeWidth={1.8} />}
               </button>
             </div>

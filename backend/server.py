@@ -2,7 +2,7 @@
 FORGE — AI Full-Stack App Developer SaaS
 Backend powered by FastAPI + MongoDB + Claude Sonnet 4.5 + Emergent Auth.
 """
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -36,6 +36,44 @@ db = client[os.environ["DB_NAME"]]
 
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "")
+
+
+# ----------------------- Live (WebSocket) presence ----------------------
+class ConnectionManager:
+    """Tracks websocket connections per project and broadcasts events."""
+    def __init__(self):
+        self.rooms: dict[str, list] = {}  # project_id -> [{"ws":ws,"user":{...}}]
+
+    async def connect(self, project_id: str, ws: WebSocket, user_info: dict):
+        self.rooms.setdefault(project_id, []).append({"ws": ws, "user": user_info})
+
+    def disconnect(self, project_id: str, ws: WebSocket):
+        conns = self.rooms.get(project_id, [])
+        self.rooms[project_id] = [c for c in conns if c["ws"] is not ws]
+        if not self.rooms[project_id]:
+            self.rooms.pop(project_id, None)
+
+    def presence(self, project_id: str):
+        seen = {}
+        for c in self.rooms.get(project_id, []):
+            u = c["user"]
+            seen[u["user_id"]] = u
+        return list(seen.values())
+
+    async def broadcast(self, project_id: str, payload: dict, exclude_ws=None):
+        dead = []
+        for c in list(self.rooms.get(project_id, [])):
+            if c["ws"] is exclude_ws:
+                continue
+            try:
+                await c["ws"].send_json(payload)
+            except Exception:
+                dead.append(c["ws"])
+        for ws in dead:
+            self.disconnect(project_id, ws)
+
+
+manager = ConnectionManager()
 
 # Fixed subscription packages (defined server-side for security)
 # Stripe Checkout in one-time mode — each purchase tops up credits. Subscriptions
@@ -89,6 +127,11 @@ class ProjectUpdate(BaseModel):
 
 class InviteRequest(BaseModel):
     email: str
+    role: Optional[str] = "editor"  # "editor" or "viewer"
+
+
+class MemberUpdate(BaseModel):
+    role: str  # "editor" or "viewer"
 
 
 class Message(BaseModel):
@@ -229,16 +272,21 @@ async def logout(request: Request, response: Response):
 
 # ----------------------- Projects ----------------------
 async def _user_can_access_project(project_id: str, user: User) -> Optional[dict]:
-    """Returns the project doc if user is owner or collaborator, else None."""
+    """Returns the project doc if user is owner or collaborator, else None.
+    Attaches `member_role` attribute: 'owner' | 'editor' | 'viewer'."""
     project = await db.projects.find_one({"project_id": project_id}, {"_id": 0})
     if not project:
         return None
     if project["user_id"] == user.user_id:
+        project["member_role"] = "owner"
         return project
     membership = await db.project_members.find_one(
         {"project_id": project_id, "email": user.email}, {"_id": 0}
     )
-    return project if membership else None
+    if membership:
+        project["member_role"] = membership.get("role", "editor")
+        return project
+    return None
 
 
 @api_router.get("/projects")
@@ -312,12 +360,31 @@ async def invite_collaborator(project_id: str, payload: InviteRequest, user: Use
         "member_id": f"mem_{uuid.uuid4().hex[:10]}",
         "project_id": project_id,
         "email": email,
+        "role": payload.role if payload.role in ("editor", "viewer") else "editor",
         "invited_by": user.user_id,
         "invited_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.project_members.insert_one(member)
     member.pop("_id", None)
     return member
+
+
+@api_router.patch("/projects/{project_id}/members/{member_id}")
+async def update_member(project_id: str, member_id: str, payload: MemberUpdate,
+                       user: User = Depends(get_current_user)):
+    project = await db.projects.find_one({"project_id": project_id, "user_id": user.user_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found or not owner")
+    if payload.role not in ("editor", "viewer"):
+        raise HTTPException(status_code=400, detail="Invalid role")
+    res = await db.project_members.update_one(
+        {"member_id": member_id, "project_id": project_id},
+        {"$set": {"role": payload.role}}
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Member not found")
+    updated = await db.project_members.find_one({"member_id": member_id}, {"_id": 0})
+    return updated
 
 
 @api_router.delete("/projects/{project_id}/members/{member_id}")
@@ -354,6 +421,8 @@ async def chat(project_id: str, payload: ChatRequest, user: User = Depends(get_c
     project = await _user_can_access_project(project_id, user)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("member_role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot send messages")
     if user.credits <= 0:
         raise HTTPException(status_code=402, detail="Out of credits")
 
@@ -401,6 +470,12 @@ async def chat(project_id: str, payload: ChatRequest, user: User = Depends(get_c
         {"$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
+    # Broadcast to other connected collaborators
+    sender = {"user_id": user.user_id, "name": user.name, "email": user.email, "picture": user.picture}
+    user_doc.pop("_id", None)
+    await manager.broadcast(project_id, {"type": "message", "message": user_doc, "sender": sender})
+    await manager.broadcast(project_id, {"type": "message", "message": ai_doc, "sender": {"user_id": "forge", "name": "Forge"}})
+
     return {"message": ai_doc}
 
 
@@ -413,6 +488,8 @@ async def chat_stream(project_id: str, payload: ChatRequest, user: User = Depend
     project = await _user_can_access_project(project_id, user)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("member_role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot send messages")
     if user.credits <= 0:
         raise HTTPException(status_code=402, detail="Out of credits")
 
@@ -468,6 +545,12 @@ async def chat_stream(project_id: str, payload: ChatRequest, user: User = Depend
             {"project_id": project_id},
             {"$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
         )
+
+        # Broadcast to other collaborators (they won't see streaming — they see final message)
+        sender = {"user_id": user.user_id, "name": user.name, "email": user.email, "picture": user.picture}
+        await manager.broadcast(project_id, {"type": "message", "message": user_doc, "sender": sender})
+        await manager.broadcast(project_id, {"type": "message", "message": ai_doc, "sender": {"user_id": "forge", "name": "Forge"}})
+
         yield f"event: done\ndata: {json.dumps({'message': ai_doc})}\n\n"
 
     return StreamingResponse(event_gen(), media_type="text/event-stream", headers={
@@ -475,6 +558,72 @@ async def chat_stream(project_id: str, payload: ChatRequest, user: User = Depend
         "Connection": "keep-alive",
         "X-Accel-Buffering": "no",
     })
+
+
+# ----------------------- WebSocket (live presence + typing) ----------------------
+async def _resolve_user_from_token(token: str) -> Optional[User]:
+    if not token:
+        return None
+    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if not session:
+        return None
+    user_doc = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+    if not user_doc:
+        return None
+    return User(**user_doc)
+
+
+@app.websocket("/api/ws/projects/{project_id}")
+async def ws_project(websocket: WebSocket, project_id: str, token: Optional[str] = None):
+    """Live presence + typing broadcasts. Auth via session_token cookie or ?token="""
+    await websocket.accept()
+    # Prefer cookie over query param
+    cookie_token = websocket.cookies.get("session_token")
+    user = await _resolve_user_from_token(cookie_token or token or "")
+    if not user:
+        await websocket.send_json({"type": "error", "detail": "unauthorized"})
+        await websocket.close()
+        return
+
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        await websocket.send_json({"type": "error", "detail": "no access"})
+        await websocket.close()
+        return
+
+    user_info = {
+        "user_id": user.user_id,
+        "name": user.name,
+        "email": user.email,
+        "picture": user.picture,
+        "role": project.get("member_role", "editor"),
+    }
+    await manager.connect(project_id, websocket, user_info)
+
+    # Send current presence to new joiner, announce joined to others
+    await websocket.send_json({"type": "presence", "users": manager.presence(project_id)})
+    await manager.broadcast(project_id, {"type": "presence", "users": manager.presence(project_id)})
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            t = data.get("type")
+            if t == "typing":
+                await manager.broadcast(project_id, {
+                    "type": "typing",
+                    "user_id": user.user_id,
+                    "name": user.name,
+                    "is_typing": bool(data.get("is_typing", True)),
+                }, exclude_ws=websocket)
+            elif t == "ping":
+                await websocket.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logging.warning(f"WebSocket error: {e}")
+    finally:
+        manager.disconnect(project_id, websocket)
+        await manager.broadcast(project_id, {"type": "presence", "users": manager.presence(project_id)})
 
 
 # ----------------------- Project Export (ZIP) ----------------------

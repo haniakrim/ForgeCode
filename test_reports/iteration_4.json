@@ -1,0 +1,85 @@
+{
+  "summary": "Completed comprehensive testing of FORGE AI v5 features: Role-based access (editor/viewer), WebSocket live presence + typing, package.json-driven Sandpack deps, daylight Sandpack chrome. Backend: 19/19 tests passed. Frontend: All v5 features working correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_forge_v5_features.py",
+    "/app/test_reports/pytest/pytest_v5_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "SandpackPreview correctly merges package.json dependencies with DEFAULT_DEPS and doesn't mount package.json as src file",
+    "WebSocket endpoint correctly accepts both cookie session_token and ?token= query param for auth",
+    "Viewer role correctly restricts chat access with 403 response and disabled UI"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_forge_v5_features.py"
+  ],
+  "success_rate": {
+    "backend": "100% (19/19 tests passed)",
+    "frontend": "100% (all v5 features working)"
+  },
+  "test_credentials": {
+    "owner_token": "test_session_v5_owner_1776414855985",
+    "owner_email": "owner_v5@forge.dev",
+    "viewer_token": "test_session_v5_viewer_1776414855987",
+    "viewer_email": "viewer_v5@forge.dev",
+    "editor_token": "test_session_v5_editor_1776414855988",
+    "editor_email": "editor_v5@forge.dev",
+    "note": "Test users cleaned up after testing"
+  },
+  "seed_data_creation": "Created owner, viewer, and editor test users via mongosh for role-based access testing",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "v5 features fully tested: (1) Role-based access: POST /invite with role field, PATCH /members/{mid} to change role, invalid role returns 400, GET /projects/{id} returns member_role. (2) Viewer restrictions: POST /chat returns 403 'Viewers cannot send messages', POST /chat/stream returns 403, frontend chat input disabled with 'Viewers are read-only.' placeholder, share button hidden for non-owners. (3) WebSocket: accepts cookie session_token or ?token= query param, sends presence on connect, broadcasts typing to others (excludes sender), ping/pong works, bad auth returns error and closes. (4) Sandpack: DEFAULT_DEPS includes react-router-dom, lucide-react, clsx, date-fns, axios, framer-motion; package.json detection merges deps; sp-daylight/sp-noir classes applied based on theme.",
+  "features_tested": {
+    "backend": [
+      "POST /api/projects/{id}/invite with role='editor' creates member with editor role",
+      "POST /api/projects/{id}/invite with role='viewer' creates member with viewer role",
+      "POST /api/projects/{id}/invite without role defaults to editor",
+      "PATCH /api/projects/{id}/members/{mid} with role='viewer' updates role",
+      "PATCH /api/projects/{id}/members/{mid} with role='editor' updates role",
+      "PATCH /api/projects/{id}/members/{mid} with invalid role returns 400",
+      "GET /api/projects/{id} for viewer returns member_role='viewer'",
+      "GET /api/projects/{id} for editor returns member_role='editor'",
+      "GET /api/projects/{id} for owner returns member_role='owner'",
+      "POST /api/projects/{id}/chat for viewer returns 403",
+      "POST /api/projects/{id}/chat/stream for viewer returns 403",
+      "POST /api/projects/{id}/chat for editor works (not 403)",
+      "POST /api/projects/{id}/chat for owner works",
+      "WebSocket accepts ?token= query param for auth",
+      "WebSocket with bad token returns error and closes",
+      "WebSocket for project user has no access to returns error",
+      "WebSocket ping returns pong",
+      "WebSocket typing broadcasts to others (excludes sender)",
+      "WebSocket presence includes user info with role"
+    ],
+    "frontend": [
+      "ShareDialog shows invite-role-select dropdown",
+      "ShareDialog shows per-member role dropdown (role-{member_id})",
+      "ShareDialog shows remove button (remove-{member_id})",
+      "Share button visible for owner (isOwner)",
+      "Share button hidden for viewer (non-owner)",
+      "Viewer chip visible for viewers",
+      "Chat input disabled for viewers",
+      "Chat input placeholder 'Viewers are read-only.' for viewers",
+      "Send button disabled for viewers",
+      "Theme toggle switches between noir and daylight",
+      "Sandpack uses sp-daylight class in daylight theme",
+      "Sandpack uses sp-noir class in noir theme",
+      "SandpackPreview shows idle state when no files"
+    ]
+  },
+  "known_issues": {
+    "from_previous_iterations": {
+      "emergentintegrations_library_bug": "get_checkout_status() fails with Pydantic validation error - checkout creation works, status polling returns 502"
+    }
+  }
+}
