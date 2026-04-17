@@ -4,102 +4,92 @@
 "i want to build a full-stack app developer like you SAAS"
 
 ## Product Vision
-FORGE is an AI full-stack app developer SaaS — a neo-brutalist, developer-focused competitor to Emergent / Lovable / v0 / Bolt. Users describe an app idea in natural language, Claude Sonnet 4.5 plans + writes code, a split-pane IDE shows generated files with a live HTML/React preview.
+FORGE is an AI full-stack app developer SaaS — a noir-editorial, developer-focused competitor to Emergent / Lovable / v0 / Bolt. Users describe an app idea in natural language; the selected LLM (Claude / GPT / Gemini) plans and writes code; a split-pane IDE shows generated files with a live React preview. Users can push to GitHub, deploy to Vercel/Netlify, or export a ZIP.
 
 ## User Personas
-1. **Indie Hacker** — wants to ship MVPs over a weekend without boilerplate.
-2. **Freelance Engineer** — uses FORGE to accelerate client project scaffolding.
-3. **Product Manager** — prototypes internal tools without waiting for engineering.
-4. **Senior Engineer** — generates readable code they can own and extend.
+1. **Indie Hacker** — ship MVPs over a weekend without boilerplate.
+2. **Freelance Engineer** — accelerate client project scaffolding.
+3. **Product Manager** — prototype internal tools without engineering wait.
+4. **Senior Engineer** — generate readable, owner-operable code.
 
-## Core Requirements (static)
+## Core Capabilities
 - Google OAuth via Emergent Auth (httpOnly cookie + Bearer fallback)
-- AI code generation via Claude Sonnet 4.5 (emergentintegrations)
-- Project CRUD with multi-turn chat history
-- Split-view workspace: chat ↔ code/preview IDE
-- Credit system (100 free credits / user, −1 per message)
+- Multi-model AI code generation: Claude Sonnet 4.5 (default) / Haiku 4.5 / Opus 4.5, GPT-5.2 / 4o-mini, Gemini 3 Pro / Flash
+- Bring-your-own API keys per provider (optional)
+- Custom system prompts (override FORGE persona)
+- Multi-turn chat with SSE streaming
+- Split-view workspace: chat ↔ code/preview IDE (Sandpack)
+- Monaco editor with Yjs CRDT collaborative editing
+- Real-time presence + typing indicators (WebSocket)
+- Role-based collaboration (owner / editor / viewer)
+- Email invitations (Resend)
+- Project activity log
 - Template gallery (6 prebuilt prompts)
-- Neo-brutalist aesthetic: Cabinet Grotesk + JetBrains Mono, 2px black borders, hard offset shadows, `#FF3311` accent
+- Credit system (100 free credits / user, −1 per turn/review)
+- Stripe-powered billing (4 packages: Studio $29, Maison $99, Topup $10, Topup $29)
+- ZIP project export
+
+## Agent Cognition (v8 — "think like Claude")
+1. **Senior-engineer system prompt** — principal-level CoT (restate → edges → approach → file plan → code), quality rules (data-testid, env vars, no _id leak, /api prefix), stack conventions.
+2. **Plan → Build two-pass** — `mode="plan"` returns only a markdown plan (Goal / Approach / File plan / Risks). User clicks "Approve & build" to run build pass.
+3. **Self-critique review** — `POST /api/projects/{id}/review` concatenates project files and grades against a 5-axis rubric (correctness, security, conventions, maintainability, UX).
+4. **Agentic tool-use loop** — `mode="agent"` lets the model emit `<tool name="list_files|read_file|write_file|done" .../>` XML tags. Backend parses, executes, feeds results back. Max 5 rounds.
+5. **Per-project memory** — auto-maintained `project_memory` collection. Compressed bullet-point doc of architecture decisions, files created, open TODOs. Injected into system prompt every turn.
+
+## Integrations (v7)
+| Provider | Auth | Purpose |
+|---|---|---|
+| GitHub | PAT or OAuth (end-user) | Create repo + push files via Git Data API |
+| Vercel | PAT (end-user) | Deploy via `/v13/deployments` with inline files |
+| Netlify | PAT (end-user) | Deploy ZIP via `/api/v1/sites/{site_id}/deploys` |
 
 ## Architecture
-**Backend (FastAPI + MongoDB)** — `/app/backend/server.py`
-- Models: `User`, `Project`, `Message`, `Session`
-- Endpoints (all `/api`):
-  - `POST /auth/session` (X-Session-ID → cookie)
-  - `GET /auth/me`, `POST /auth/logout`
-  - `GET/POST /projects`, `GET/DELETE /projects/{id}`
-  - `POST /projects/{id}/chat` (Claude Sonnet 4.5)
-  - `GET /templates`
-- LLM: `emergentintegrations.llm.chat.LlmChat` + model `anthropic/claude-sonnet-4-5-20250929`
+**Backend (FastAPI + MongoDB + emergentintegrations)** — `/app/backend/server.py`
+- Collections: `users`, `user_sessions`, `user_settings`, `projects`, `project_members`, `messages`, `project_files`, `project_memory`, `project_activity`, `payment_transactions`
+- WebSocket endpoints: `/api/ws/projects/{id}` (presence), `/api/ws/yjs/{id}/{file_path}` (CRDT relay)
+- Streaming: SSE `/api/projects/{id}/chat/stream` with events `user | token | agent_step | tool_result | done`
 
-**Frontend (React 19 + Tailwind + shadcn)** — `/app/frontend/src`
-- Pages: `Landing`, `Dashboard`, `Project`, `Templates`, `Settings`, `AuthCallback`
-- Global `AuthContext` with `/auth/me` gate + session_id hash detection
-- Live preview: iframe with Babel standalone + Tailwind CDN renders AI-generated JSX / HTML
+**Frontend (React + Tailwind + Sandpack + Monaco)** — `/app/frontend/src/`
+- Routes: `/`, `/dashboard`, `/templates`, `/project/:id`, `/settings`, `/billing`, `/billing/success`, `/share/:id`
+- Settings page tabs: Profile / AI engine (model picker + system prompt + BYO keys) / Integrations (GitHub/Vercel/Netlify cards)
+- Project page: split IDE, toolbar (Export · Deploy · Review · Memory · Activity · Share), chat with mode selector (Plan/Build/Agent)
 
-## Implemented (Feb 17, 2026)
-- ✅ Full landing page (hero, marquee, features, how-it-works, pricing, manifesto, testimonials, CTA, footer)
-- ✅ Emergent Google Auth end-to-end
-- ✅ Dashboard with quick-prompt + project cards + profile panel
-- ✅ Split-pane workspace with file tree, code tab, live preview tab
-- ✅ Template gallery with 6 starters (SaaS dashboard, chatbot, CRM, blog CMS, e-commerce, kanban)
-- ✅ Settings page with credits display + logout
-- ✅ Claude Sonnet 4.5 integration via emergentintegrations
-- ✅ Credit system (decrements atomically)
-- ✅ 13/13 backend API tests passing, all frontend flows verified
+## Implemented Milestones
+### Phase 1-5 (complete)
+- Scaffold, auth, chat SSE, ZIP export, Stripe billing
+- Noir/Editorial UI redesign, theme toggle (Noir/Daylight)
+- Role-based collaboration, WebSocket live presence
+- Sandpack multi-file preview, Monaco+Yjs collaborative editor
+- Project activity logs, Resend email invites, offline/reconnect
 
-## Implemented (Feb 17, 2026 — v6: Monaco+Yjs + Resend + Activity + WS Reconnect)
-- ✅ **Monaco editor + Yjs CRDT** — Code tab now uses Monaco (`@monaco-editor/react`) bound to a `Y.Doc` via `y-websocket` + `y-monaco`. Edits sync in real-time between peers via relay at `/api/ws/yjs/{project_id}/{file_path}`. Auto-save debounced (1.5s) to `project_files` collection via `PUT /api/projects/{id}/files`. Peer counter + connection state shown in editor header. Viewers get read-only mode.
-- ✅ **Email notification via Resend** — `resend` package installed. `POST /api/projects/{id}/invite` sends an HTML invite email to the new collaborator. When `RESEND_API_KEY` is missing, `_send_email` gracefully logs `[email mock] →` and returns `{status:"mocked"}`.
-- ✅ **Project activity log** — new `project_activity` collection + `_log_activity()` helper. Auto-logs: `member.invited`, `member.role_changed`, `project.made_public/private`, `file.edited`, `message.sent`. New `GET /api/projects/{id}/activity` endpoint. Owner-only "Activity" button in project header opens `ActivityDialog` with icons, labels, and relative time.
-- ✅ **WS reconnect-with-backoff + offline indicator** — WebSocket hook now auto-reconnects with exponential backoff (1s → 2s → … → 30s cap), resets on successful open. Header chip shows "offline" with `WifiOff` icon when disconnected, pulsing "live" when connected. `StrictMode` was removed since its synthetic double-mount broke long-lived WS connections in dev.
-- ✅ Export ZIP now merges `project_files` edits over AI-generated blocks (latest wins).
-- ✅ 20/20 v6 backend tests passing; all frontend features verified.
+### Phase 6 — Integrations (v7, iteration 6)
+- User settings: `/api/settings` + model picker + custom system prompt + BYO keys
+- GitHub PAT + OAuth connect; one-click push from project
+- Vercel deploy (inline files, v13 API)
+- Netlify deploy (ZIP upload)
+- DeployMenu toolbar component
 
-## Implemented (Feb 17, 2026 — v5: Roles + Live Presence + Expanded Sandpack)
-- ✅ **Editor vs Viewer roles** — `project_members.role = editor|viewer`. Viewers are 403-blocked from chat (REST + SSE). Owner-only `PATCH /api/projects/{id}/members/{mid}` to update role. Role-selector dropdown in ShareDialog for invites + existing members.
-- ✅ **Live presence & typing** — WebSocket `/api/ws/projects/{id}` (cookie-authenticated or `?token=`). Tracks connected users per project, broadcasts `presence`, `typing`, and `message` events. Frontend shows avatar stack + "N live" chip + "X is typing…" indicator above composer. Chat messages now appear in real-time across all connected collaborators without polling.
-- ✅ **Sandpack deps expanded + `package.json` driven** — default deps now include `react-router-dom`, `lucide-react`, `clsx`, `date-fns`, `axios`, `framer-motion`. If AI emits a `package.json` fenced block, its `dependencies` are merged (AI-declared wins). The `package.json` file itself is excluded from mounted project files.
-- ✅ **Daylight-optimized Sandpack chrome** — `.sp-daylight` / `.sp-noir` classes applied based on theme; Sandpack loading screen, preview container, error overlay, and action buttons now use the correct palette in both modes.
-- ✅ 19/19 v5 backend tests passing; all frontend flows verified.
+### Phase 7 — Agent Cognition (v8, iteration 7)
+- Rewritten SYSTEM_PROMPT (principal-engineer CoT + quality rules)
+- Plan / Build / Agent mode selector
+- Plan-only responses with "Approve & build" button
+- `/api/projects/{id}/review` endpoint + drawer UI
+- `/api/projects/{id}/memory` GET/PUT + auto-maintenance
+- Agentic XML tool-use loop (list_files / read_file / write_file / done)
 
-## Implemented (Feb 17, 2026 — v4: Theme toggle + Collaboration + Sandpack)
-- ✅ **Theme toggle** — Noir ↔ Daylight, toggle in navbar (Sun/Moon icon), persists in `localStorage`. Daylight uses cream `#F4EFE5` paper with dark text; same burnt-orange brand. All pages (Landing, Dashboard, Project, Templates, Settings, Billing, Share) respond to theme via CSS variables.
-- ✅ **Real-time collaboration** (async):
-  - Public share links — owner toggles `public: true` to expose `/share/{project_id}` read-only (no auth required)
-  - Email invites — owner invites collaborators by email; collaborators see the project in their dashboard, can chat (their own credits are deducted)
-  - New collections: `project_members`
-  - New endpoints: `PATCH /api/projects/{id}`, `POST /api/projects/{id}/invite`, `DELETE /api/projects/{id}/members/{mid}`, `GET /api/share/{project_id}` (no auth)
-  - Share button on project page (owner only) opens ShareDialog with public toggle + copy-link + invite form + member list
-- ✅ **Sandpack multi-file preview** — replaced the old single-file Babel iframe with `@codesandbox/sandpack-react`. JSX/TSX/JS/TS/CSS/JSON/HTML files get mounted into a real React bundler with npm deps. Editor hidden via CSS so only the live preview pane shows.
-- ✅ 21/21 backend tests passing; all frontend flows verified.
+## Test Coverage
+- iteration_1.json → iteration_7.json
+- Latest: **56/56 backend tests passed** (27 v8 + 29 v7 regression)
+- Zero open critical/minor bugs
 
-## Implemented (Feb 17, 2026 — v3: SSE + Export + Stripe + Mobile Contrast)
-- ✅ `POST /api/projects/{id}/chat/stream` — SSE endpoint streams Claude's reply token-by-token (events: `user` / `token` / `done`). Persists both messages, deducts 1 credit.
-- ✅ `GET /api/projects/{id}/export` — bundles all assistant code fences into a ZIP (with README), preserves file paths from `:path` annotations.
-- ✅ Stripe checkout (test key) — 3 tiers (Atelier free, Studio $29, Maison $99) + 2 top-up packs ($10/500 credits, $29/2000 credits). Endpoints: `/payments/{packages,checkout,status/{sid}}` + `/webhook/stripe`. All transactions recorded in `payment_transactions` collection, credits applied idempotently.
-- ✅ `/billing` and `/billing/success` frontend pages with polling + timeout handling.
-- ✅ Mobile contrast pass: bumped `--text-2`, `--text-3`, `--border` in `@media (max-width: 768px)`, chip borders strengthened, serif headlines clamped for small viewports.
-- ✅ Graceful fallback when `emergentintegrations.stripe.get_checkout_status` hits a library pydantic bug — endpoint returns `pending` instead of 502, webhook keeps credit assignment working.
-- ✅ 17/17 v2 backend tests pass.
+## Known Issues
+- emergentintegrations `get_checkout_status()` Pydantic validation error on Stripe status polling (mitigated via try/except graceful fallback; webhook handles actual payment confirmation)
 
-## P0 Backlog (next)
-- Real-time streaming responses (SSE) instead of polled replies
-- Stripe subscription tiers (Builder $29, Studio $99)
-- GitHub export: download project as ZIP / push to repo
-- Project forking & version history
-
-## P1 Backlog
-- Multi-file diff / patch application view
-- Shared projects + team workspaces
-- Tool-use: backend actually executes generated code in an ephemeral sandbox (Docker)
-- Voice-to-code input (Whisper)
-
-## P2 Backlog
-- Marketplace for community templates
-- Custom domain deployment
-- Analytics dashboard (build times, credit burn)
-
-## Known Constraints
-- Preview iframe only renders single-file React / HTML; multi-file apps cannot fully execute in-browser (would need server-side sandbox).
-- Credits are virtual until Stripe is wired up.
+## P1 / P2 Backlog
+- P1: Per-turn diff view ("what changed") in code pane
+- P1: File rollback / point-in-time history
+- P2: Visual plan editor (drag-drop file list before approving)
+- P2: Multi-agent orchestration (planner + coder + reviewer as separate LLM calls)
+- P2: In-app notification bell (for invites, reviews, deploys)
+- P3: Marketplace for community system prompts
+- P3: Supabase/Firebase integration options
