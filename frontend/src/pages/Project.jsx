@@ -115,6 +115,7 @@ export default function Project() {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [memoryDoc, setMemoryDoc] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [mobilePane, setMobilePane] = useState("chat"); // "chat" | "workspace" — mobile only
   const [reasoning, setReasoning] = useState("");          // current/last turn reasoning
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const [visibility, setVisibility] = useState({ is_public: false, showcase_tagline: "", published_at: null });
@@ -526,9 +527,26 @@ export default function Project() {
         </div>
       </div>
 
-      <div className="grid flex-1 overflow-hidden" style={{ gridTemplateColumns: "minmax(380px, 1fr) minmax(420px, 1.35fr)" }}>
+      {/* Mobile pane toggle */}
+      <div className="md:hidden flex border-y border-[var(--border)] bg-[var(--surface)]" data-testid="mobile-pane-switch">
+        <button
+          data-testid="mobile-pane-chat"
+          onClick={() => setMobilePane("chat")}
+          className={`flex-1 py-2.5 text-xs transition-colors ${mobilePane === "chat" ? "text-[var(--text)] border-b-2 border-[var(--brand)]" : "text-[var(--text-3)]"}`}
+        >Chat</button>
+        <button
+          data-testid="mobile-pane-workspace"
+          onClick={() => setMobilePane("workspace")}
+          className={`flex-1 py-2.5 text-xs transition-colors ${mobilePane === "workspace" ? "text-[var(--text)] border-b-2 border-[var(--brand)]" : "text-[var(--text-3)]"}`}
+        >Workspace</button>
+      </div>
+
+      <div
+        className="grid flex-1 overflow-hidden md:[grid-template-columns:minmax(380px,1fr)_minmax(420px,1.35fr)]"
+        style={{ gridTemplateColumns: undefined }}
+      >
         {/* Left: Chat */}
-        <div className="flex flex-col overflow-hidden border-r border-[var(--border)] bg-[var(--surface-2)]">
+        <div className={`flex flex-col overflow-hidden md:border-r border-[var(--border)] bg-[var(--surface-2)] ${mobilePane === "workspace" ? "hidden md:flex" : "flex"}`}>
           <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-6" data-testid="chat-scroll">
             {messages.length === 0 && (
               <div className="glass rounded-2xl p-6">
@@ -633,7 +651,7 @@ export default function Project() {
         </div>
 
         {/* Right: IDE / Preview */}
-        <div className="flex flex-col overflow-hidden bg-[var(--ide-bg)]">
+        <div className={`flex flex-col overflow-hidden bg-[var(--ide-bg)] ${mobilePane === "chat" ? "hidden md:flex" : "flex"}`}>
           <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--border)] bg-black/40">
             <div className="flex items-center gap-1">
               <button

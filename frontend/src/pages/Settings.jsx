@@ -223,7 +223,16 @@ function AITab() {
       </div>
 
       <div className="glass rounded-2xl p-7 lg:col-span-2" data-testid="system-prompt-card">
-        <div className="overline">Custom system prompt</div>
+        <div className="flex items-center justify-between">
+          <div className="overline">Custom system prompt</div>
+          <a
+            href="/prompts"
+            data-testid="browse-prompts-link"
+            className="text-[10px] text-[var(--brand)] hover:underline inline-flex items-center gap-1"
+          >
+            Browse marketplace →
+          </a>
+        </div>
         <div className="mt-2 text-sm text-[var(--text-2)]">
           Override FORGE's default persona. Leave blank to keep the built-in senior-engineer prompt.
         </div>

@@ -1505,6 +1505,7 @@ async def get_settings(user: User = Depends(get_current_user)):
     return {
         "model_id": s["model_id"],
         "system_prompt": s["system_prompt"],
+        "applied_prompt_id": (await db.user_settings.find_one({"user_id": user.user_id}, {"_id": 0, "applied_prompt_id": 1}) or {}).get("applied_prompt_id"),
         "byo_keys": {k: bool(v) for k, v in (s.get("byo_keys") or {}).items()},
         "integrations": {
             "github": _integration_status(s.get("github") or {}, "username"),
@@ -2511,6 +2512,187 @@ async def fork_project(project_id: str, user: User = Depends(get_current_user)):
     return new_proj
 
 
+# ----------------------- Prompt marketplace ----------------------
+CURATED_PROMPTS = [
+    {
+        "prompt_id": "curated_stripe_style",
+        "title": "Stripe-style Engineer",
+        "description": "Tight declarative voice. Zero filler. Ships production-grade code with inline commentary only where a senior reviewer would genuinely pause.",
+        "body": "You write like a Stripe engineer: terse, declarative, every sentence load-bearing. No apologies, no preambles, no emojis. Use TypeScript over JavaScript when a choice exists. Prefer composable primitives to heavy abstractions. Document only what isn't self-evident.",
+        "tags": ["style", "senior", "typescript"],
+        "featured": True,
+    },
+    {
+        "prompt_id": "curated_security_auditor",
+        "title": "Paranoid Security Auditor",
+        "description": "Treats every input as hostile. Validates at boundaries. Mentions CWE numbers for classic bugs. Refuses to emit `eval`, `exec`, or string-built SQL.",
+        "body": "You are a security-first engineer. Every external input is untrusted until proven otherwise. Validate and sanitize at system boundaries. Default to parameterised queries, allow-lists, and least privilege. Flag CWE numbers when relevant (e.g. CWE-79 XSS, CWE-89 SQLi, CWE-22 path traversal). Never emit `eval`, `exec`, or string-concatenated SQL.",
+        "tags": ["security", "audit", "backend"],
+        "featured": True,
+    },
+    {
+        "prompt_id": "curated_design_obsessed",
+        "title": "Design-obsessed Frontend Dev",
+        "description": "Treats design tokens as law. Cares about spacing, type hierarchy, micro-motion. Rejects lazy `transition: all`. Ships components that feel expensive.",
+        "body": "You are a design-obsessed frontend engineer. Treat design tokens (CSS variables) as law — never hardcode colors, spacing, or radii. Respect a strict type hierarchy. Every interaction gets a purposeful micro-animation; NEVER use `transition: all`. Components should feel expensive: layered shadows, generous whitespace, purposeful motion.",
+        "tags": ["frontend", "design", "motion"],
+        "featured": True,
+    },
+    {
+        "prompt_id": "curated_rust_systems",
+        "title": "Rust Systems Engineer",
+        "description": "Explains memory-safety tradeoffs, uses `Result`-first error handling, and prefers `impl Trait` over boxed dyn for hot paths.",
+        "body": "You're a Rust systems engineer. Default to idiomatic Rust: `Result`-first error handling with `thiserror`/`anyhow`, `?` propagation, ownership-conscious APIs. Prefer `impl Trait` to boxed `dyn` on hot paths. Call out unsafe blocks with justification. Keep allocations explicit.",
+        "tags": ["rust", "systems", "performance"],
+        "featured": False,
+    },
+    {
+        "prompt_id": "curated_docs_writer",
+        "title": "Concise Documentation Writer",
+        "description": "Every README has a 3-bullet Quick Start, a copy-pasteable example, and a truthful Troubleshooting section. No 'Welcome to our project!' padding.",
+        "body": "You are a technical writer optimising for developer time-to-first-success. Every README: (1) a 3-bullet Quick Start at the top, (2) a copy-pasteable working example, (3) a truthful Troubleshooting section listing the top 5 real failure modes. No emoji banners, no 'Welcome!' padding, no marketing copy. Prose is terse, present-tense, second-person.",
+        "tags": ["docs", "writing", "readme"],
+        "featured": False,
+    },
+    {
+        "prompt_id": "curated_k8s_devops",
+        "title": "Kubernetes-native DevOps",
+        "description": "Writes manifests with resource limits, liveness/readiness probes, non-root containers, and NetworkPolicy by default.",
+        "body": "You are a Kubernetes-native platform engineer. Every manifest ships with: resource requests+limits, liveness+readiness probes, `runAsNonRoot: true`, `readOnlyRootFilesystem: true` where possible, and a default-deny NetworkPolicy. Prefer Helm values over duplicated YAML. Use HorizontalPodAutoscaler for web workloads.",
+        "tags": ["devops", "kubernetes", "production"],
+        "featured": False,
+    },
+]
+
+
+async def _seed_prompt_marketplace():
+    """Upsert curated prompts on startup — idempotent."""
+    for p in CURATED_PROMPTS:
+        now = datetime.now(timezone.utc).isoformat()
+        await db.prompt_marketplace.update_one(
+            {"prompt_id": p["prompt_id"]},
+            {"$set": {**p,
+                      "author_user_id": "forge_curated",
+                      "author_name": "Forge Curated",
+                      "curated": True,
+                      "updated_at": now},
+             "$setOnInsert": {"upvotes": 0, "usage_count": 0, "created_at": now}},
+            upsert=True,
+        )
+
+
+class PromptSubmit(BaseModel):
+    title: str
+    description: Optional[str] = ""
+    body: str
+    tags: Optional[List[str]] = []
+
+
+@api_router.get("/prompts")
+async def list_prompts(q: Optional[str] = None, sort: str = "featured",
+                       tag: Optional[str] = None, limit: int = 60):
+    """Public — no auth required. List curated + community prompts."""
+    mongo_q: dict = {}
+    if q:
+        regex = {"$regex": re.escape(q), "$options": "i"}
+        mongo_q["$or"] = [{"title": regex}, {"description": regex}, {"tags": regex}]
+    if tag:
+        mongo_q["tags"] = tag
+    if sort == "popular":
+        sort_spec = [("upvotes", -1), ("usage_count", -1)]
+    elif sort == "recent":
+        sort_spec = [("created_at", -1)]
+    else:  # featured — curated first, then by upvotes
+        sort_spec = [("featured", -1), ("curated", -1), ("upvotes", -1)]
+    rows = await db.prompt_marketplace.find(
+        mongo_q, {"_id": 0}
+    ).sort(sort_spec).to_list(max(1, min(limit, 200)))
+    return rows
+
+
+@api_router.get("/prompts/{prompt_id}")
+async def get_prompt(prompt_id: str):
+    p = await db.prompt_marketplace.find_one({"prompt_id": prompt_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    return p
+
+
+@api_router.post("/prompts")
+async def submit_prompt(payload: PromptSubmit, user: User = Depends(get_current_user)):
+    title = payload.title.strip()
+    body = payload.body.strip()
+    if not title or len(title) > 80:
+        raise HTTPException(status_code=400, detail="Title must be 1-80 chars")
+    if not body or len(body) > 8000:
+        raise HTTPException(status_code=400, detail="Prompt body must be 1-8000 chars")
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "prompt_id": f"pmt_{uuid.uuid4().hex[:12]}",
+        "title": title,
+        "description": (payload.description or "")[:300],
+        "body": body,
+        "tags": [t.strip().lower() for t in (payload.tags or []) if t.strip()][:6],
+        "author_user_id": user.user_id,
+        "author_name": user.name,
+        "author_picture": user.picture,
+        "curated": False,
+        "featured": False,
+        "upvotes": 0,
+        "usage_count": 0,
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.prompt_marketplace.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.post("/prompts/{prompt_id}/upvote")
+async def upvote_prompt(prompt_id: str, user: User = Depends(get_current_user)):
+    existing = await db.prompt_upvotes.find_one(
+        {"prompt_id": prompt_id, "user_id": user.user_id}, {"_id": 0})
+    if existing:
+        # Toggle off
+        await db.prompt_upvotes.delete_one(
+            {"prompt_id": prompt_id, "user_id": user.user_id})
+        await db.prompt_marketplace.update_one(
+            {"prompt_id": prompt_id}, {"$inc": {"upvotes": -1}})
+        return {"upvoted": False}
+    await db.prompt_upvotes.insert_one({
+        "prompt_id": prompt_id, "user_id": user.user_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    res = await db.prompt_marketplace.update_one(
+        {"prompt_id": prompt_id}, {"$inc": {"upvotes": 1}})
+    if not res.matched_count:
+        # Rollback the upvote row since prompt doesn't exist
+        await db.prompt_upvotes.delete_one(
+            {"prompt_id": prompt_id, "user_id": user.user_id})
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    return {"upvoted": True}
+
+
+@api_router.post("/prompts/{prompt_id}/apply")
+async def apply_prompt(prompt_id: str, user: User = Depends(get_current_user)):
+    """Set this prompt as the user's active system prompt."""
+    p = await db.prompt_marketplace.find_one({"prompt_id": prompt_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    await db.user_settings.update_one(
+        {"user_id": user.user_id},
+        {"$set": {"system_prompt": p["body"],
+                  "applied_prompt_id": prompt_id,
+                  "updated_at": datetime.now(timezone.utc).isoformat()},
+         "$setOnInsert": {"user_id": user.user_id,
+                          "created_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    await db.prompt_marketplace.update_one(
+        {"prompt_id": prompt_id}, {"$inc": {"usage_count": 1}})
+    return {"applied": True, "prompt_id": prompt_id, "title": p["title"]}
+
+
 # ----------------------- Templates ----------------------
 TEMPLATES = [
     {"template_id": "saas-dashboard", "name": "SaaS Dashboard", "icon": "LayoutDashboard",
@@ -2557,6 +2739,14 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+
+@app.on_event("startup")
+async def startup():
+    try:
+        await _seed_prompt_marketplace()
+    except Exception:
+        logging.exception("prompt marketplace seed failed")
 
 
 @app.on_event("shutdown")
