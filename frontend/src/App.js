@@ -40,14 +40,15 @@ function App() {
           <AppRouter />
           <Toaster
             position="bottom-right"
+            theme="dark"
             toastOptions={{
               style: {
-                border: "2px solid #0A0A0A",
-                borderRadius: 0,
-                boxShadow: "4px 4px 0px #0A0A0A",
-                fontFamily: "JetBrains Mono, monospace",
-                background: "#fff",
-                color: "#0A0A0A",
+                background: "rgba(18,18,18,0.95)",
+                backdropFilter: "blur(24px)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                borderRadius: "14px",
+                fontFamily: "Outfit, sans-serif",
+                color: "#F2E8D5",
               },
             }}
           />

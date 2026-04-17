@@ -48,6 +48,15 @@ FORGE is an AI full-stack app developer SaaS — a neo-brutalist, developer-focu
 - ✅ Credit system (decrements atomically)
 - ✅ 13/13 backend API tests passing, all frontend flows verified
 
+## Redesigned (Feb 17, 2026 — v2)
+- ✅ Full visual overhaul to "Noir Architectural / Editorial" aesthetic (user rejected previous neo-brutalist v1)
+- ✅ Deep `#050505` obsidian background with warm radial glow + film grain
+- ✅ Typography: Playfair Display (serif, italic accents) + Outfit (body) + IBM Plex Mono (code)
+- ✅ Burnt orange `#F25C05` brand + emerald `#00F298` + gold `#E5B05C` accents
+- ✅ Glassmorphism panels (`backdrop-blur-2xl` + inner highlight + subtle border)
+- ✅ Pill buttons with warm glow shadow, staggered fade-up entrance motion
+- ✅ All 6 pages (Landing, Dashboard, Project, Templates, Settings, AuthCallback) ported to new system
+
 ## P0 Backlog (next)
 - Real-time streaming responses (SSE) instead of polled replies
 - Stripe subscription tiers (Builder $29, Studio $99)

@@ -5,8 +5,8 @@ export const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="brut bg-white p-8 font-mono text-sm uppercase tracking-widest">
+      <div className="flex h-screen items-center justify-center bg-[#050505]">
+        <div className="glass rounded-2xl px-8 py-6 mono text-sm text-[var(--text-2)]">
           <span className="caret">Authenticating</span>
         </div>
       </div>

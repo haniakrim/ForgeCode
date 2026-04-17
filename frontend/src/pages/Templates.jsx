@@ -17,33 +17,39 @@ export default function Templates() {
     try {
       const { data } = await api.post("/projects", { name: t.name, description: t.description });
       await api.post(`/projects/${data.project_id}/chat`, { content: t.prompt });
-      toast.success(`Forging ${t.name}...`);
+      toast.success(`Composing ${t.name}...`);
       navigate(`/project/${data.project_id}`);
     } catch { toast.error("Could not start template"); }
   };
 
   return (
-    <div>
+    <div className="min-h-screen pb-20">
       <Navbar />
-      <div className="mx-auto max-w-[1400px] px-6 py-10" data-testid="templates-page">
-        <div className="text-xs font-bold uppercase tracking-[0.3em] text-[#FF3311]">[blueprints]</div>
-        <h1 className="mt-2 text-4xl md:text-6xl font-black tracking-tighter" style={{ fontFamily: "Cabinet Grotesk" }}>
-          Pre-forged<br />starting points.
-        </h1>
-        <p className="mt-3 max-w-xl text-sm text-[#555]">Skip the blank page. Pick a template, we&apos;ll bootstrap the project and hand it off to the AI.</p>
+      <div className="mx-auto max-w-[1400px] px-6 md:px-10 py-14" data-testid="templates-page">
+        <div className="max-w-3xl fade-up">
+          <div className="overline">Library</div>
+          <h1 className="serif mt-4 text-5xl md:text-7xl" style={{ fontWeight: 400 }}>
+            Pre-composed<br /><span className="italic-serif gradient-text">starting points.</span>
+          </h1>
+          <p className="mt-6 text-[var(--text-2)] text-lg">
+            Skip the blank page. Pick a blueprint — we&apos;ll bootstrap the project and hand it off
+            to Forge so it can finish the details.
+          </p>
+        </div>
 
-        <div className="mt-10 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {items.map((t) => {
+        <div className="mt-14 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {items.map((t, i) => {
             const Icon = Icons[t.icon] || Icons.Sparkles;
             return (
-              <div key={t.template_id} className="brut bg-white p-6 flex flex-col" data-testid={`template-${t.template_id}`}>
-                <div className="flex h-11 w-11 items-center justify-center border-2 border-black bg-[#0A0A0A]">
-                  <Icon className="h-5 w-5 text-[#FF3311]" strokeWidth={2.5} />
+              <div key={t.template_id} data-testid={`template-${t.template_id}`} className={`glass glass-hover rounded-2xl p-7 flex flex-col fade-up d-${Math.min(i + 1, 5)}`}>
+                <div className="mono text-[10px] tracking-widest uppercase text-[var(--text-3)]">Blueprint {String(i + 1).padStart(2, "0")}</div>
+                <div className="mt-4 inline-flex h-11 w-11 items-center justify-center rounded-xl border border-[var(--border)] bg-black/40">
+                  <Icon className="h-5 w-5 text-[var(--brand)]" strokeWidth={1.5} />
                 </div>
-                <h3 className="mt-5 text-2xl font-black tracking-tighter" style={{ fontFamily: "Cabinet Grotesk" }}>{t.name}</h3>
-                <p className="mt-2 flex-1 text-sm text-[#555]">{t.description}</p>
-                <button onClick={() => start(t)} className="btn-primary mt-5 self-start" data-testid={`use-${t.template_id}`}>
-                  Use template →
+                <h3 className="serif mt-5 text-3xl" style={{ fontWeight: 500 }}>{t.name}</h3>
+                <p className="mt-2 flex-1 text-sm text-[var(--text-2)]">{t.description}</p>
+                <button onClick={() => start(t)} className="btn btn-primary mt-6 self-start" data-testid={`use-${t.template_id}`}>
+                  Use blueprint <Icons.ArrowUpRight className="h-4 w-4" strokeWidth={1.8} />
                 </button>
               </div>
             );

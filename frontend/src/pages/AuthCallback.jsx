@@ -15,10 +15,7 @@ export default function AuthCallback() {
 
     const hash = window.location.hash;
     const match = hash.match(/session_id=([^&]+)/);
-    if (!match) {
-      navigate("/", { replace: true });
-      return;
-    }
+    if (!match) { navigate("/", { replace: true }); return; }
     const sessionId = match[1];
 
     (async () => {
@@ -27,7 +24,6 @@ export default function AuthCallback() {
           headers: { "X-Session-ID": sessionId },
         });
         setUser(data.user);
-        // Clear fragment and redirect
         window.history.replaceState({}, "", "/dashboard");
         navigate("/dashboard", { replace: true, state: { user: data.user } });
       } catch (e) {
@@ -38,12 +34,13 @@ export default function AuthCallback() {
   }, [navigate, setUser]);
 
   return (
-    <div className="flex h-screen items-center justify-center bg-[#F4F4F0]">
-      <div className="brut bg-white p-10">
-        <div className="text-xs font-bold uppercase tracking-[0.3em] text-[#FF3311]">[authenticating]</div>
-        <div className="mt-3 text-2xl font-black tracking-tighter" style={{ fontFamily: "Cabinet Grotesk" }}>
+    <div className="flex h-screen items-center justify-center bg-[#050505]">
+      <div className="glass rounded-2xl p-12 text-center">
+        <div className="overline">authenticating</div>
+        <div className="serif mt-3 text-3xl">
           Exchanging tokens<span className="caret"></span>
         </div>
+        <div className="mt-2 text-sm text-[var(--text-2)]">One second. Setting your workspace up.</div>
       </div>
     </div>
   );
