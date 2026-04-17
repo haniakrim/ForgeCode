@@ -98,18 +98,26 @@ FORGE is an AI full-stack app developer SaaS — a noir-editorial, developer-foc
 - New `/showcase` page with editorial hero, Recent/Popular sort, one-click Fork that clones files + memory + increments source.fork_count
 - Visibility toggle drawer in project toolbar with showcase-tagline editor
 
+### Phase 10 — Marketplace, Detail pages, Mobile (v11, iteration 13)
+- Reasoning protocol rewritten to `[[REASONING]]...[[/REASONING]]` custom markers (Claude was silently converting XML `<thinking>` to native thinking blocks); now always appended regardless of custom system prompt
+- `/showcase/:id` project detail page — hero with author/stack/forks/files/published metadata, iterative file tree, optional project memory, big Fork CTA
+- Community Prompt Marketplace — `prompt_marketplace` collection + 6 seeded curated prompts (Stripe-style Engineer, Paranoid Security Auditor, Design-obsessed Frontend Dev, Rust Systems Engineer, Concise Documentation Writer, Kubernetes-native DevOps)
+- `GET/POST /prompts`, `POST /prompts/{id}/upvote` (toggle), `POST /prompts/{id}/apply` (sets user system_prompt + tracks applied_prompt_id)
+- `/prompts` page — editorial hero, Featured/Popular/Recent sort, search + tag filters, per-card upvote + Apply, submit-new dialog
+- Applied badge on active prompt card; link from Settings → AI Engine tab
+- Mobile-responsive Project IDE — Chat/Workspace pane switcher for <768px viewports
+
 ## Test Coverage
-- iteration_1.json → iteration_10.json
-- Latest: **43/43 v10 tests passed** + prior 88/88 v8 + 3/3 v9 E2E
+- iteration_1.json → iteration_13.json
+- Latest: **24/24 v11 tests passed + 100% frontend E2E** (prior 43/43 v10 + 88/88 v9 + all earlier regression)
 - Zero open critical/minor bugs
 
 ## Known Issues
 - emergentintegrations `get_checkout_status()` Pydantic validation error on Stripe status polling (mitigated via try/except graceful fallback; webhook handles actual payment confirmation)
 - Side-by-side diff for single-line files without trailing newline produces unusual layout (difflib edge case; real multi-line code works fine)
 
-## P1 / P2 Backlog
-- P3: Community marketplace for system prompts (featured / trending prompts users can apply)
+## Backlog
 - P3: Supabase / Firebase backend integration options
-- P3: Mobile-responsive IDE layout polish
-- P3: Showcase project detail page (`/showcase/:id`) with live Sandpack preview
-- P3: Email digest of weekly Showcase trending projects
+- P3: Per-user analytics dashboard (credits spent, models used, deploys per week)
+- P3: Weekly Showcase trending email digest (requires scheduled job)
+- P3: Headless Sandpack thumbnail capture for Showcase cards (currently text-only)
