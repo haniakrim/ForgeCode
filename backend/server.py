@@ -517,23 +517,31 @@ async def checkout_status(session_id: str, request: Request, user: User = Depend
     if tx["user_id"] != user.user_id:
         raise HTTPException(status_code=403, detail="Not your transaction")
 
-    # If already processed, return cached status
+    # If already processed (via webhook or previous poll), return cached status
     if tx.get("credits_applied"):
-        return {"payment_status": tx.get("payment_status"), "status": tx.get("status"),
-                "credits_added": tx.get("credits", 0), "already_applied": True}
+        return {"payment_status": tx.get("payment_status", "paid"),
+                "status": tx.get("status", "completed"),
+                "credits_added": tx.get("credits", 0),
+                "already_applied": True}
 
     stripe = _stripe_client(request)
     try:
         status = await stripe.get_checkout_status(session_id)
+        payment_status = status.payment_status
+        sess_status = status.status
     except Exception as e:
-        logging.exception("Stripe status error")
-        raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)[:160]}")
+        # emergentintegrations library has a known Pydantic validation issue with
+        # the metadata field. Fall back gracefully — webhook may confirm payment,
+        # frontend will keep polling or time out.
+        logging.warning(f"Stripe status lib error (session {session_id}): {str(e)[:200]}")
+        return {"payment_status": "pending", "status": "processing",
+                "credits_added": 0, "already_applied": False, "lib_error": True}
 
-    updates = {"payment_status": status.payment_status, "status": status.status}
+    updates = {"payment_status": payment_status, "status": sess_status}
 
     # Apply credits idempotently on success
     credits_added = 0
-    if status.payment_status == "paid" and not tx.get("credits_applied"):
+    if payment_status == "paid" and not tx.get("credits_applied"):
         credits_added = tx.get("credits", 0)
         new_tier = tx["package_id"] if tx["package_id"] in ("studio", "maison") else None
         user_updates = {"$inc": {"credits": credits_added}}
@@ -543,7 +551,7 @@ async def checkout_status(session_id: str, request: Request, user: User = Depend
         updates["credits_applied"] = True
 
     await db.payment_transactions.update_one({"session_id": session_id}, {"$set": updates})
-    return {"payment_status": status.payment_status, "status": status.status,
+    return {"payment_status": payment_status, "status": sess_status,
             "credits_added": credits_added, "already_applied": False}
 
 

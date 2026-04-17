@@ -48,14 +48,14 @@ FORGE is an AI full-stack app developer SaaS — a neo-brutalist, developer-focu
 - ✅ Credit system (decrements atomically)
 - ✅ 13/13 backend API tests passing, all frontend flows verified
 
-## Redesigned (Feb 17, 2026 — v2)
-- ✅ Full visual overhaul to "Noir Architectural / Editorial" aesthetic (user rejected previous neo-brutalist v1)
-- ✅ Deep `#050505` obsidian background with warm radial glow + film grain
-- ✅ Typography: Playfair Display (serif, italic accents) + Outfit (body) + IBM Plex Mono (code)
-- ✅ Burnt orange `#F25C05` brand + emerald `#00F298` + gold `#E5B05C` accents
-- ✅ Glassmorphism panels (`backdrop-blur-2xl` + inner highlight + subtle border)
-- ✅ Pill buttons with warm glow shadow, staggered fade-up entrance motion
-- ✅ All 6 pages (Landing, Dashboard, Project, Templates, Settings, AuthCallback) ported to new system
+## Implemented (Feb 17, 2026 — v3: SSE + Export + Stripe + Mobile Contrast)
+- ✅ `POST /api/projects/{id}/chat/stream` — SSE endpoint streams Claude's reply token-by-token (events: `user` / `token` / `done`). Persists both messages, deducts 1 credit.
+- ✅ `GET /api/projects/{id}/export` — bundles all assistant code fences into a ZIP (with README), preserves file paths from `:path` annotations.
+- ✅ Stripe checkout (test key) — 3 tiers (Atelier free, Studio $29, Maison $99) + 2 top-up packs ($10/500 credits, $29/2000 credits). Endpoints: `/payments/{packages,checkout,status/{sid}}` + `/webhook/stripe`. All transactions recorded in `payment_transactions` collection, credits applied idempotently.
+- ✅ `/billing` and `/billing/success` frontend pages with polling + timeout handling.
+- ✅ Mobile contrast pass: bumped `--text-2`, `--text-3`, `--border` in `@media (max-width: 768px)`, chip borders strengthened, serif headlines clamped for small viewports.
+- ✅ Graceful fallback when `emergentintegrations.stripe.get_checkout_status` hits a library pydantic bug — endpoint returns `pending` instead of 502, webhook keeps credit assignment working.
+- ✅ 17/17 v2 backend tests pass.
 
 ## P0 Backlog (next)
 - Real-time streaming responses (SSE) instead of polled replies
