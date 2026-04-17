@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
-import { ArrowLeft, Send, Loader2, Code2, Eye, FileCode2, Sparkles, Copy, CheckCheck, Download, Share2, WifiOff, Activity, NotebookPen, Hammer, Bot, ClipboardCheck, Brain, X, History, Users2 } from "lucide-react";
+import { ArrowLeft, Send, Loader2, Code2, Eye, FileCode2, Sparkles, Copy, CheckCheck, Download, Share2, WifiOff, Activity, NotebookPen, Hammer, Bot, ClipboardCheck, Brain, X, History, Users2, Globe, Lock, ChevronDown } from "lucide-react";
 import { DeployMenu } from "../components/DeployMenu";
 import { HistoryDialog } from "../components/HistoryDialog";
 import { toast } from "sonner";
@@ -115,6 +115,10 @@ export default function Project() {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [memoryDoc, setMemoryDoc] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [reasoning, setReasoning] = useState("");          // current/last turn reasoning
+  const [reasoningOpen, setReasoningOpen] = useState(false);
+  const [visibility, setVisibility] = useState({ is_public: false, showcase_tagline: "", published_at: null });
+  const [visibilityOpen, setVisibilityOpen] = useState(false);
   const scrollRef = useRef(null);
   const wsRef = useRef(null);
   const typingDebounceRef = useRef(null);
@@ -128,6 +132,11 @@ export default function Project() {
       setProject(data.project);
       setMessages(data.messages);
       setMembers(data.members || []);
+      setVisibility({
+        is_public: !!data.project.is_public,
+        showcase_tagline: data.project.showcase_tagline || "",
+        published_at: data.project.published_at || null,
+      });
     } catch {
       toast.error("Project not found");
       navigate("/dashboard");
@@ -228,6 +237,7 @@ export default function Project() {
     if (!text || sending) return;
     if (!override) setInput("");
     setSending(true);
+    setReasoning("");
     const userTmp = { message_id: "tmp-u", role: "user", content: text, created_at: new Date().toISOString() };
     const aiTmp = { message_id: "tmp-a", role: "assistant", content: "", created_at: new Date().toISOString(), mode: activeMode };
     setMessages((m) => [...m, userTmp, aiTmp]);
@@ -273,6 +283,10 @@ export default function Project() {
           if (type === "token") {
             streamed += parsed.t ?? "";
             setMessages((m) => m.map((x) => x.message_id === "tmp-a" ? { ...x, content: streamed } : x));
+          } else if (type === "reasoning") {
+            // Stream model's private reasoning into a side panel
+            setReasoning(parsed.r || "");
+            setReasoningOpen(true);
           } else if (type === "tool_result") {
             // Agent mode: append a compact tool trace line to the message
             const line = `\n\n<tool ran="${parsed.tool?.name}" path="${parsed.tool?.path || ''}">${parsed.result?.ok ? 'ok' : (parsed.result?.error || 'failed')}</tool>`;
@@ -328,6 +342,21 @@ export default function Project() {
       setMemoryDoc(r.data.content || "");
     } catch {
       setMemoryDoc("(failed to load memory)");
+    }
+  };
+
+  const saveVisibility = async (patch) => {
+    try {
+      const { data } = await api.put(`/projects/${id}/visibility`, { ...visibility, ...patch });
+      setVisibility({
+        is_public: !!data.is_public,
+        showcase_tagline: data.showcase_tagline || "",
+        published_at: data.published_at || null,
+      });
+      setProject((p) => ({ ...p, ...data }));
+      toast.success(data.is_public ? "Project is public" : "Project made private");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Save failed");
     }
   };
 
@@ -462,6 +491,17 @@ export default function Project() {
             </button>
             {isOwner && (
               <button
+                onClick={() => setVisibilityOpen(true)}
+                data-testid="visibility-btn"
+                className={`btn btn-ghost !py-1.5 !px-3 !text-xs ${visibility.is_public ? "!border-[var(--emerald)]/40" : ""}`}
+                title={visibility.is_public ? "Public on Showcase" : "Private"}
+              >
+                {visibility.is_public ? <Globe className="h-3.5 w-3.5 text-[var(--emerald)]" strokeWidth={1.8} /> : <Lock className="h-3.5 w-3.5" strokeWidth={1.8} />}
+                <span className="hidden md:inline">{visibility.is_public ? "Public" : "Private"}</span>
+              </button>
+            )}
+            {isOwner && (
+              <button
                 onClick={() => setActivityOpen(true)}
                 data-testid="activity-btn"
                 className="btn btn-ghost !py-1.5 !px-3 !text-xs"
@@ -511,6 +551,19 @@ export default function Project() {
             )}
           </div>
           <form onSubmit={send} className="border-t border-[var(--border)] p-4 bg-[var(--surface)]" data-testid="chat-form">
+            {reasoning && (
+              <button
+                type="button"
+                data-testid="reasoning-toggle"
+                onClick={() => setReasoningOpen((v) => !v)}
+                className={`mb-2 flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] transition-colors ${reasoningOpen ? "border-[var(--brand)]/60 bg-[var(--brand)]/10 text-[var(--text)]" : "border-[var(--border)] text-[var(--text-3)] hover:text-[var(--text)]"}`}
+                title="Model's internal reasoning"
+              >
+                <Brain className={`h-3 w-3 ${reasoningOpen ? "text-[var(--brand)]" : ""}`} strokeWidth={1.8} />
+                <span className="mono">thinking · {reasoning.split(/\s+/).filter(Boolean).length} words</span>
+                <ChevronDown className={`h-2.5 w-2.5 transition-transform ${reasoningOpen ? "rotate-180" : ""}`} strokeWidth={2} />
+              </button>
+            )}
             {Object.keys(typingUsers).length > 0 && (
               <div className="flex items-center gap-2 mb-2 px-1 text-xs text-[var(--text-2)] italic-serif" data-testid="typing-indicator">
                 <span className="inline-flex gap-0.5">
@@ -696,6 +749,105 @@ export default function Project() {
       )}
       {historyOpen && (
         <HistoryDialog projectId={id} onClose={() => setHistoryOpen(false)} />
+      )}
+      {reasoningOpen && reasoning && (
+        <div
+          data-testid="reasoning-panel"
+          className="fixed right-4 bottom-28 z-50 w-[380px] max-h-[50vh] overflow-hidden rounded-2xl border border-[var(--brand)]/30 bg-[var(--bg)]/96 backdrop-blur-xl shadow-2xl flex flex-col"
+        >
+          <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)] bg-[var(--surface-2)]">
+            <div className="flex items-center gap-2">
+              <Brain className="h-3.5 w-3.5 text-[var(--brand)]" strokeWidth={1.8} />
+              <div>
+                <div className="overline !text-[var(--text-3)] !text-[9px]">internal reasoning</div>
+                <div className="text-sm italic-serif" style={{ fontWeight: 500 }}>thinking…</div>
+              </div>
+            </div>
+            <button
+              onClick={() => setReasoningOpen(false)}
+              data-testid="reasoning-close"
+              className="rounded-full border border-[var(--border)] p-1 hover:border-[var(--brand)]/40 transition-colors"
+            >
+              <X className="h-3 w-3" strokeWidth={1.8} />
+            </button>
+          </div>
+          <div className="overflow-y-auto p-4 text-xs leading-relaxed text-[var(--text-2)] whitespace-pre-wrap" data-testid="reasoning-body">
+            {reasoning}
+          </div>
+        </div>
+      )}
+      {visibilityOpen && (
+        <DrawerDialog
+          title={visibility.is_public ? "Live in Showcase" : "Publish to Showcase"}
+          subtitle="Public gallery · anyone can view and fork"
+          onClose={() => setVisibilityOpen(false)}
+          testid="visibility-dialog"
+        >
+          <div className="space-y-5">
+            <div className="flex items-start gap-4 rounded-xl border border-[var(--border)] p-4 bg-black/30">
+              <div className={`h-10 w-10 rounded-xl border flex items-center justify-center shrink-0 ${visibility.is_public ? "border-[var(--emerald)]/40 text-[var(--emerald)] bg-[var(--emerald)]/8" : "border-[var(--border)] text-[var(--text-3)]"}`}>
+                {visibility.is_public ? <Globe className="h-4 w-4" strokeWidth={1.6} /> : <Lock className="h-4 w-4" strokeWidth={1.6} />}
+              </div>
+              <div className="flex-1">
+                <div className="serif text-lg" style={{ fontWeight: 500 }}>
+                  {visibility.is_public ? "Public" : "Private"}
+                </div>
+                <p className="text-xs text-[var(--text-2)] mt-1 leading-relaxed">
+                  {visibility.is_public
+                    ? `Anyone can view and fork this project via /showcase. Published ${new Date(visibility.published_at).toLocaleDateString()}.`
+                    : "Only you and invited collaborators can see this project."}
+                </p>
+              </div>
+              <label className="inline-flex items-center cursor-pointer">
+                <input
+                  data-testid="visibility-toggle"
+                  type="checkbox"
+                  checked={visibility.is_public}
+                  onChange={(e) => saveVisibility({ is_public: e.target.checked })}
+                  className="peer sr-only"
+                />
+                <span className="relative h-6 w-11 rounded-full bg-[var(--surface-2)] border border-[var(--border)] transition-colors peer-checked:bg-[var(--brand)]/50 peer-checked:border-[var(--brand)]">
+                  <span className="absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-[var(--text)] transition-transform peer-checked:translate-x-5" style={{ transform: visibility.is_public ? "translateX(20px)" : "translateX(0)" }} />
+                </span>
+              </label>
+            </div>
+
+            {visibility.is_public && (
+              <div>
+                <div className="overline !text-[var(--text-3)]">Showcase tagline</div>
+                <textarea
+                  data-testid="visibility-tagline"
+                  defaultValue={visibility.showcase_tagline}
+                  placeholder="One sentence pitch for gallery visitors (max 180 chars)"
+                  rows={2}
+                  maxLength={180}
+                  onBlur={(e) => {
+                    const next = e.target.value;
+                    if (next !== visibility.showcase_tagline) saveVisibility({ showcase_tagline: next });
+                  }}
+                  className="mt-2 w-full rounded-xl border border-[var(--border)] bg-black/30 p-3 text-sm focus:outline-none focus:border-[var(--brand)]/50 resize-none"
+                />
+                <div className="mt-2 text-xs text-[var(--text-3)]">
+                  Tip: leave blank to show the project description instead.
+                </div>
+                <a
+                  href={`/showcase`}
+                  target="_blank" rel="noreferrer"
+                  data-testid="visibility-view-gallery"
+                  className="btn btn-ghost mt-4 w-full !py-2 !text-xs"
+                >
+                  View Showcase gallery →
+                </a>
+              </div>
+            )}
+
+            {!visibility.is_public && (
+              <div className="text-xs text-[var(--text-3)] italic-serif">
+                Flip the toggle to publish. You can revert at any time — forks stay with their new owner.
+              </div>
+            )}
+          </div>
+        </DrawerDialog>
       )}
     </div>
   );

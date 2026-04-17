@@ -14,6 +14,7 @@ import Settings from "./pages/Settings";
 import Billing from "./pages/Billing";
 import BillingSuccess from "./pages/BillingSuccess";
 import Share from "./pages/Share";
+import Showcase from "./pages/Showcase";
 import AuthCallback from "./pages/AuthCallback";
 
 function AppRouter() {
@@ -32,6 +33,7 @@ function AppRouter() {
       <Route path="/billing" element={<ProtectedRoute><Billing /></ProtectedRoute>} />
       <Route path="/billing/success" element={<ProtectedRoute><BillingSuccess /></ProtectedRoute>} />
       <Route path="/share/:id" element={<Share />} />
+      <Route path="/showcase" element={<Showcase />} />
     </Routes>
   );
 }

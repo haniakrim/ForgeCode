@@ -279,6 +279,9 @@ Use fenced markdown blocks with an explicit file path on the fence tag, e.g.:
 Do NOT regenerate files that haven't changed. If you need to reference an existing file, cite its path and describe the edit.
 
 If the user asks something trivial (like "change the button color"), skip the plan and just do it.
+
+## THINKING PROTOCOL (internal-to-user)
+Before your visible answer, wrap your private reasoning in `<thinking>...</thinking>` tags. The runtime will strip these tags and stream them into a dedicated "Reasoning" side-panel so the user can watch you plan. Keep reasoning concise (< 20 lines), honest, and terse — first-person, present-tense. The content AFTER `</thinking>` is the user-facing answer (which still follows the Output format above).
 """
 
 # ② Plan-only addendum — appended when mode="plan"
@@ -428,6 +431,21 @@ async def _auto_update_memory(project_id: str, user_msg: str, assistant_reply: s
         await _set_project_memory(project_id, new_memory)
     except Exception:
         logging.exception("memory update failed")
+
+
+_THINKING_RE = re.compile(r"<thinking>([\s\S]*?)</thinking>\s*", re.IGNORECASE)
+
+
+def _split_reasoning(reply: str) -> tuple[str, str]:
+    """Extract <thinking>...</thinking> content; return (reasoning, visible_answer)."""
+    if not reply:
+        return "", reply or ""
+    m = _THINKING_RE.search(reply)
+    if not m:
+        return "", reply
+    reasoning = m.group(1).strip()
+    visible = (reply[:m.start()] + reply[m.end():]).lstrip()
+    return reasoning, visible
 
 
 async def get_current_user(request: Request) -> User:
@@ -848,17 +866,28 @@ async def chat_stream(project_id: str, payload: ChatRequest, user: User = Depend
             logging.exception("LLM stream error")
             reply = f"[FORGE Error] Unable to reach model: {str(e)[:200]}"
 
-        # Chunk by ~ whitespace groups for smooth streaming
-        tokens = re.findall(r"\s+|\S+", reply)
+        # Split reasoning (<thinking>) from the visible answer. Agent mode keeps
+        # the full reply (tool-call traces are intentional output).
+        if mode == "agent":
+            reasoning, visible = "", reply
+        else:
+            reasoning, visible = _split_reasoning(reply)
+        if reasoning:
+            yield f"event: reasoning\ndata: {json.dumps({'r': reasoning})}\n\n"
+
+        # Chunk the VISIBLE answer by whitespace groups for smooth streaming
+        tokens = re.findall(r"\s+|\S+", visible)
         for tok in tokens:
             yield f"event: token\ndata: {json.dumps({'t': tok})}\n\n"
             await asyncio.sleep(0.008 if mode == "agent" else 0.012)
 
-        # Persist final assistant message (tag the mode in metadata)
-        ai_msg = Message(project_id=project_id, role="assistant", content=reply)
+        # Persist final assistant message — store visible body, save reasoning as meta
+        ai_msg = Message(project_id=project_id, role="assistant", content=visible)
         ai_doc = ai_msg.model_dump()
         ai_doc["created_at"] = ai_doc["created_at"].isoformat()
         ai_doc["mode"] = mode
+        if reasoning:
+            ai_doc["reasoning"] = reasoning
         await db.messages.insert_one(ai_doc)
         ai_doc.pop("_id", None)
 
@@ -874,9 +903,9 @@ async def chat_stream(project_id: str, payload: ChatRequest, user: User = Depend
         await manager.broadcast(project_id, {"type": "message", "message": ai_doc, "sender": {"user_id": "forge", "name": "Forge"}})
 
         # ⑤ Fire-and-forget memory refresh (skip for plan mode — planning isn't building yet)
-        if mode in ("build", "agent") and reply and not reply.startswith("[FORGE Error]"):
+        if mode in ("build", "agent") and visible and not visible.startswith("[FORGE Error]"):
             asyncio.create_task(_auto_update_memory(
-                project_id, payload.content, reply, api_key, provider, model_id))
+                project_id, payload.content, visible, api_key, provider, model_id))
 
         yield f"event: done\ndata: {json.dumps({'message': ai_doc})}\n\n"
 
@@ -2187,6 +2216,246 @@ async def multi_agent_stream(project_id: str, payload: ChatRequest,
     return StreamingResponse(event_gen(), media_type="text/event-stream", headers={
         "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no",
     })
+
+
+# ----------------------- Project snapshots (P2 — full-project rollback) ----------
+class SnapshotCreate(BaseModel):
+    label: Optional[str] = None
+    description: Optional[str] = ""
+
+
+@api_router.post("/projects/{project_id}/snapshots")
+async def create_snapshot(project_id: str, payload: SnapshotCreate,
+                          user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("member_role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot snapshot")
+    files = await db.project_files.find({"project_id": project_id}, {"_id": 0}).to_list(1000)
+    # Copy content + path only; omit per-file metadata to keep snapshot self-contained.
+    frozen = [{"path": f["path"].lstrip("/"), "content": f.get("content", "")} for f in files]
+    total_bytes = sum(len(f["content"]) for f in frozen)
+    snap = {
+        "snapshot_id": f"snp_{uuid.uuid4().hex[:12]}",
+        "project_id": project_id,
+        "label": (payload.label or f"Snapshot {datetime.now(timezone.utc).strftime('%b %d, %H:%M')}")[:80],
+        "description": (payload.description or "")[:400],
+        "files": frozen,
+        "file_count": len(frozen),
+        "total_bytes": total_bytes,
+        "created_by": user.user_id,
+        "created_by_name": user.name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.project_snapshots.insert_one(snap)
+    snap.pop("_id", None)
+    await _log_activity(project_id,
+                        actor={"user_id": user.user_id, "name": user.name, "email": user.email},
+                        event_type="snapshot.created",
+                        detail=snap["label"],
+                        meta={"files": len(frozen), "bytes": total_bytes})
+    # Don't return the fat `files` array in create response — keep it light.
+    snap.pop("files", None)
+    return snap
+
+
+@api_router.get("/projects/{project_id}/snapshots")
+async def list_snapshots(project_id: str, user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    rows = await db.project_snapshots.find(
+        {"project_id": project_id}, {"_id": 0, "files": 0}
+    ).sort("created_at", -1).to_list(200)
+    return rows
+
+
+@api_router.post("/projects/{project_id}/snapshots/{snapshot_id}/restore")
+async def restore_snapshot(project_id: str, snapshot_id: str,
+                           user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("member_role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot restore")
+    snap = await db.project_snapshots.find_one(
+        {"project_id": project_id, "snapshot_id": snapshot_id}, {"_id": 0})
+    if not snap:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+
+    # Safety: capture a pre-restore snapshot automatically so nothing is ever lost.
+    await create_snapshot(project_id,
+                          SnapshotCreate(label=f"Auto: before restore of {snap['label'][:40]}",
+                                         description="Automatic safety snapshot"),
+                          user)
+
+    now = datetime.now(timezone.utc).isoformat()
+    # Wipe current files; rewrite from snapshot.
+    await db.project_files.delete_many({"project_id": project_id})
+    for f in snap["files"]:
+        path = f["path"].lstrip("/")
+        await db.project_files.insert_one({
+            "file_id": f"file_{uuid.uuid4().hex[:10]}",
+            "project_id": project_id,
+            "path": path,
+            "content": f["content"],
+            "updated_at": now,
+            "updated_by": user.user_id,
+            "updated_by_name": user.name,
+        })
+        await _snapshot_file_version(project_id, path, f["content"], user, source="snapshot_restore")
+    await _log_activity(project_id,
+                        actor={"user_id": user.user_id, "name": user.name, "email": user.email},
+                        event_type="snapshot.restored",
+                        detail=snap["label"],
+                        meta={"files": len(snap["files"])})
+    await _notify(user.user_id, kind="restored",
+                  title=f"Restored snapshot: {snap['label']}",
+                  body=f"{len(snap['files'])} files rewritten",
+                  project_id=project_id, link=f"/project/{project_id}")
+    return {"restored": True, "files": len(snap["files"]),
+            "snapshot_id": snapshot_id, "label": snap["label"]}
+
+
+@api_router.delete("/projects/{project_id}/snapshots/{snapshot_id}")
+async def delete_snapshot(project_id: str, snapshot_id: str,
+                          user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("member_role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot delete snapshots")
+    res = await db.project_snapshots.delete_one(
+        {"project_id": project_id, "snapshot_id": snapshot_id})
+    if not res.deleted_count:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    return {"deleted": True, "snapshot_id": snapshot_id}
+
+
+# ----------------------- Public showcase + fork (P3) ----------
+class VisibilityUpdate(BaseModel):
+    is_public: bool
+    showcase_tagline: Optional[str] = None
+
+
+@api_router.put("/projects/{project_id}/visibility")
+async def set_visibility(project_id: str, payload: VisibilityUpdate,
+                         user: User = Depends(get_current_user)):
+    project = await db.projects.find_one({"project_id": project_id, "user_id": user.user_id},
+                                         {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Only the owner can change visibility")
+    updates: dict = {
+        "is_public": bool(payload.is_public),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if payload.showcase_tagline is not None:
+        updates["showcase_tagline"] = payload.showcase_tagline[:180]
+    if payload.is_public and not project.get("published_at"):
+        updates["published_at"] = datetime.now(timezone.utc).isoformat()
+    await db.projects.update_one({"project_id": project_id}, {"$set": updates})
+    updated = await db.projects.find_one({"project_id": project_id}, {"_id": 0})
+    return updated
+
+
+@api_router.get("/showcase")
+async def list_showcase(limit: int = 60, sort: str = "recent"):
+    """Public — no auth required. Lists projects marked is_public=True."""
+    sort_key = "published_at" if sort == "recent" else "fork_count"
+    rows = await db.projects.find(
+        {"is_public": True},
+        {"_id": 0, "project_id": 1, "name": 1, "description": 1,
+         "showcase_tagline": 1, "user_id": 1, "fork_count": 1,
+         "published_at": 1, "updated_at": 1, "stack": 1},
+    ).sort(sort_key, -1).to_list(max(1, min(limit, 200)))
+    # Attach owner name / avatar
+    user_ids = list({r["user_id"] for r in rows})
+    users = {u["user_id"]: u for u in await db.users.find(
+        {"user_id": {"$in": user_ids}}, {"_id": 0, "user_id": 1, "name": 1, "picture": 1}
+    ).to_list(500)}
+    for r in rows:
+        ow = users.get(r["user_id"], {})
+        r["owner_name"] = ow.get("name", "Anonymous")
+        r["owner_picture"] = ow.get("picture", "")
+        r["fork_count"] = r.get("fork_count", 0)
+    return rows
+
+
+@api_router.get("/showcase/{project_id}")
+async def get_showcase(project_id: str):
+    p = await db.projects.find_one(
+        {"project_id": project_id, "is_public": True}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Not found or not public")
+    # Attach owner + sample file paths (not contents — keep payload light)
+    ow = await db.users.find_one({"user_id": p["user_id"]},
+                                 {"_id": 0, "name": 1, "picture": 1}) or {}
+    file_paths = [f["path"] for f in await db.project_files.find(
+        {"project_id": project_id}, {"_id": 0, "path": 1}).to_list(200)]
+    p["owner_name"] = ow.get("name", "Anonymous")
+    p["owner_picture"] = ow.get("picture", "")
+    p["file_paths"] = file_paths
+    return p
+
+
+@api_router.post("/showcase/{project_id}/fork")
+async def fork_project(project_id: str, user: User = Depends(get_current_user)):
+    src = await db.projects.find_one(
+        {"project_id": project_id, "is_public": True}, {"_id": 0})
+    if not src:
+        raise HTTPException(status_code=404, detail="Public project not found")
+    if src["user_id"] == user.user_id:
+        raise HTTPException(status_code=400, detail="You already own this project")
+
+    new_pid = f"prj_{uuid.uuid4().hex[:10]}"
+    now = datetime.now(timezone.utc).isoformat()
+    new_proj = {
+        "project_id": new_pid,
+        "user_id": user.user_id,
+        "name": f"{src['name']} (fork)",
+        "description": src.get("description", ""),
+        "stack": src.get("stack", "react-fastapi"),
+        "is_public": False,
+        "forked_from": project_id,
+        "forked_from_name": src["name"],
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.projects.insert_one(new_proj)
+
+    # Copy files (fresh file_ids + fresh versions)
+    src_files = await db.project_files.find({"project_id": project_id}, {"_id": 0}).to_list(1000)
+    for f in src_files:
+        path = f["path"]
+        content = f.get("content", "")
+        await db.project_files.insert_one({
+            "file_id": f"file_{uuid.uuid4().hex[:10]}",
+            "project_id": new_pid,
+            "path": path,
+            "content": content,
+            "updated_at": now,
+            "updated_by": user.user_id,
+            "updated_by_name": user.name,
+        })
+        await _snapshot_file_version(new_pid, path, content, user, source="fork")
+
+    # Copy memory (optional — signals intent context for new owner)
+    mem = await db.project_memory.find_one({"project_id": project_id}, {"_id": 0})
+    if mem:
+        await _set_project_memory(new_pid, mem.get("content", ""))
+
+    # Increment fork counter on source
+    await db.projects.update_one({"project_id": project_id},
+                                 {"$inc": {"fork_count": 1}})
+
+    await _log_activity(new_pid,
+                        actor={"user_id": user.user_id, "name": user.name, "email": user.email},
+                        event_type="project.forked",
+                        detail=f"Forked from {src['name']}",
+                        meta={"source_project_id": project_id})
+    new_proj.pop("_id", None)
+    return new_proj
 
 
 # ----------------------- Templates ----------------------

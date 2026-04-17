@@ -1,0 +1,119 @@
+{
+  "summary": "Completed comprehensive backend testing of FORGE v10 P1/P2/P3 features: ① Project snapshots (create/list/restore with auto-safety/delete), ② Public showcase (visibility toggle, public listing, single project view), ③ Fork (clone project with files/memory, increment fork_count), ④ Reasoning stream (<thinking> tag handling). All 43 v10 tests passed + 31/32 v9 regression tests passed (1 flaky multi-agent test).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_forge_v10_snapshots_showcase.py",
+    "/app/test_reports/pytest/pytest_v10_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Snapshots: POST /snapshots creates snapshot in project_snapshots collection, returns snapshot_id + label (files array excluded for performance)",
+    "Snapshots: GET /snapshots returns newest-first, excludes files array",
+    "Snapshots: POST /restore auto-creates safety snapshot 'Auto: before restore of...' BEFORE wiping, wipes all project_files, writes snapshot files back, creates version entries with source='snapshot_restore', sends notification kind='restored'",
+    "Snapshots: Restore is reversible via the auto-safety snapshot",
+    "Snapshots: DELETE removes snapshot; second delete returns 404",
+    "Snapshots: All mutation endpoints reject viewer role with 403",
+    "Visibility: PUT /visibility with is_public=true sets published_at first time only",
+    "Visibility: PUT /visibility with is_public=false does NOT reset published_at",
+    "Visibility: Non-owner gets 404 'Only the owner can change visibility'",
+    "Showcase: GET /showcase (no auth) returns only is_public=true projects, enriched with owner_name and owner_picture",
+    "Showcase: GET /showcase?sort=popular sorts by fork_count desc",
+    "Showcase: GET /showcase/{id} returns public project or 404 if private",
+    "Fork: POST /showcase/{id}/fork clones project, copies files, copies memory, increments source.fork_count, sets forked_from and forked_from_name",
+    "Fork: Creates version entries with source='fork'",
+    "Fork: Forked project appears in user's /api/projects list",
+    "Fork: Own project returns 400 'You already own this project'",
+    "Fork: Private/missing project returns 404",
+    "Fork: Unauthed returns 401",
+    "Reasoning: Chat stream with <thinking> tags emits 'reasoning' SSE event before token events",
+    "Reasoning: Persisted message content does NOT contain <thinking>...</thinking> literal",
+    "Reasoning: Chat works fine when LLM doesn't emit <thinking> tags",
+    "Reasoning: Agent mode preserves full reply (does NOT strip <thinking>)"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_forge_v10_snapshots_showcase.py"
+  ],
+  "success_rate": {
+    "backend": "100% (43/43 v10 tests passed)"
+  },
+  "test_credentials": {
+    "v10_owner_token": "test_session_v10_owner_<timestamp>",
+    "v10_viewer_token": "test_session_v10_viewer_<timestamp>",
+    "v10_forker_token": "test_session_v10_forker_<timestamp>",
+    "v10_project_id": "prj_test_v10_<timestamp>",
+    "existing_public_project": "prj_7c24b636fe",
+    "existing_fork_user_token": "fork_p1_tok_1776417567179",
+    "note": "Test data seeded via mongosh fixture in test file"
+  },
+  "seed_data_creation": "Created test users (owner, viewer, forker) + sessions + project with files + memory via mongosh for authenticated endpoint testing",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "v10 P1/P2/P3 features fully tested: (1) Snapshots - POST /snapshots creates snapshot (files excluded from response), GET /snapshots returns newest-first (files excluded), POST /restore auto-creates safety snapshot before wiping, creates version entries with source='snapshot_restore', sends notification kind='restored', DELETE removes snapshot (second delete 404), viewer role blocked with 403. (2) Visibility - PUT /visibility sets is_public + showcase_tagline, published_at set first time only (not reset on re-publish), non-owner gets 404. (3) Showcase - GET /showcase (no auth) returns public projects with owner_name/owner_picture, sort=popular sorts by fork_count desc, GET /showcase/{id} returns public project or 404. (4) Fork - POST /showcase/{id}/fork clones project/files/memory, increments fork_count, sets forked_from/forked_from_name, creates version entries with source='fork', own project returns 400, private/missing returns 404, unauthed returns 401. (5) Reasoning - <thinking> tags split into 'reasoning' SSE event, persisted message excludes <thinking>, agent mode preserves full reply.",
+  "features_tested": {
+    "backend": [
+      "POST /api/projects/{id}/snapshots creates snapshot, returns snapshot_id + label (files excluded)",
+      "POST /api/projects/{id}/snapshots with no label gets auto-generated label",
+      "POST /api/projects/{id}/snapshots as viewer → 403",
+      "GET /api/projects/{id}/snapshots returns newest-first, excludes files array",
+      "GET /api/projects/{id}/snapshots as viewer → allowed (read-only)",
+      "POST /api/projects/{id}/snapshots/{sid}/restore auto-creates safety snapshot",
+      "POST /api/projects/{id}/snapshots/{sid}/restore creates version entries with source='snapshot_restore'",
+      "POST /api/projects/{id}/snapshots/{sid}/restore sends notification kind='restored'",
+      "POST /api/projects/{id}/snapshots/{sid}/restore is reversible via safety snapshot",
+      "POST /api/projects/{id}/snapshots/{sid}/restore as viewer → 403",
+      "POST /api/projects/{id}/snapshots/{sid}/restore unknown snapshot → 404",
+      "DELETE /api/projects/{id}/snapshots/{sid} removes snapshot",
+      "DELETE /api/projects/{id}/snapshots/{sid} twice → 404",
+      "DELETE /api/projects/{id}/snapshots/{sid} as viewer → 403",
+      "PUT /api/projects/{id}/visibility with is_public=true sets published_at first time",
+      "PUT /api/projects/{id}/visibility with is_public=false does NOT reset published_at",
+      "PUT /api/projects/{id}/visibility re-publish does NOT update published_at",
+      "PUT /api/projects/{id}/visibility non-owner → 404",
+      "GET /api/showcase (no auth) returns only public projects with owner_name/owner_picture",
+      "GET /api/showcase?sort=popular sorts by fork_count desc",
+      "GET /api/showcase/{id} returns public project",
+      "GET /api/showcase/{id} private project → 404",
+      "GET /api/showcase/{id} nonexistent → 404",
+      "POST /api/showcase/{id}/fork clones project, files, memory, increments fork_count",
+      "POST /api/showcase/{id}/fork copies files",
+      "POST /api/showcase/{id}/fork creates version entries with source='fork'",
+      "POST /api/showcase/{id}/fork appears in user's projects list",
+      "POST /api/showcase/{id}/fork own project → 400",
+      "POST /api/showcase/{id}/fork private project → 404",
+      "POST /api/showcase/{id}/fork nonexistent → 404",
+      "POST /api/showcase/{id}/fork unauthed → 401",
+      "Chat stream with <thinking> emits 'reasoning' SSE event",
+      "Chat stream persisted message excludes <thinking> literal",
+      "Chat stream works without <thinking> tags",
+      "Agent mode preserves full reply (no <thinking> stripping)",
+      "REGRESSION: File versioning still works",
+      "REGRESSION: Notifications still work",
+      "REGRESSION: Settings still work",
+      "REGRESSION: Models still work",
+      "REGRESSION: Templates still work",
+      "REGRESSION: Memory still works",
+      "REGRESSION: Project CRUD still works",
+      "REGRESSION: Activity still works",
+      "REGRESSION: Export still works"
+    ]
+  },
+  "mocked_apis": {
+    "none": "No mocking - all LLM calls are real via EMERGENT_LLM_KEY through emergentintegrations"
+  },
+  "known_issues": {
+    "from_previous_iterations": {
+      "emergentintegrations_library_bug": "get_checkout_status() fails with Pydantic validation error - checkout creation works, status polling returns 502"
+    },
+    "flaky_tests": {
+      "test_multi_agent_message_contains_three_sections": "Intermittent failure due to SSE streaming timing - multi-agent orchestration works but test sometimes misses done event"
+    }
+  }
+}
