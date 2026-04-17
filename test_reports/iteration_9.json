@@ -1,0 +1,96 @@
+{
+  "summary": "Completed E2E frontend verification of 3 user-facing flows: (1) History dialog - file versions, diff comparison, restore; (2) Multi-agent mode - 3-phase orchestration with planner/coder/reviewer; (3) Invite + notification bell flow. All 3 flows passed successfully.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_9.json"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {
+    "frontend": "100% (3/3 flows passed)"
+  },
+  "test_credentials": {
+    "owner_user_id": "verify-owner-1",
+    "owner_email": "owner.verify@forge.dev",
+    "owner_token": "verify_owner_tok",
+    "invitee_user_id": "verify-inv-1",
+    "invitee_email": "invitee.verify@forge.dev",
+    "invitee_token": "verify_invitee_tok",
+    "test_project_id": "prj_verify_test"
+  },
+  "seed_data_creation": "Created owner user, invitee user, sessions, and test project via mongosh. Created 3 file versions for history testing via PUT /api/projects/{id}/files.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "E2E verification of 3 flows complete: (1) History dialog works - opens via [data-testid=history-btn], shows file paths in [data-testid=history-paths], versions with As A/As B comparison, unified diff with red/green lines, restore creates new version with source='restore'. (2) Multi-agent mode works - [data-testid=mode-multi] pill activates 3-phase orchestration, placeholder shows 'Planner → Coder → Reviewer', streaming shows phase markers '### ▸ planner/coder/reviewer phase', mode badge [data-testid=mode-badge-multi] visible on assistant message, credits deducted by 3. (3) Invite + notification works - Share dialog [data-testid=share-dialog] opens, invite via email creates notification for invitee, [data-testid=notifications-badge] shows unread count, [data-testid=notifications-panel] shows invite with project name, clicking notification navigates to project and marks as read.",
+  "flows_tested": {
+    "flow_1_history": {
+      "status": "PASSED",
+      "steps_verified": [
+        "History button [data-testid=history-btn] visible and clickable",
+        "History dialog [data-testid=history-dialog] opens",
+        "File paths shown in [data-testid=history-paths]",
+        "Clicking path shows versions list with timestamps and user info",
+        "Unified diff pane [data-testid=history-diff] shows red/green lines",
+        "As A / As B buttons work for version comparison",
+        "Restore button creates new version with source='restore'",
+        "Toast notification 'File restored' appears"
+      ]
+    },
+    "flow_2_multi_agent": {
+      "status": "PASSED",
+      "steps_verified": [
+        "Multi mode pill [data-testid=mode-multi] visible and clickable",
+        "Placeholder shows 'Planner → Coder → Reviewer will each take a pass (3 credits)'",
+        "Streaming response shows '### ▸ planner phase' marker",
+        "Streaming response shows '### ▸ coder phase' marker",
+        "Streaming response shows '### ▸ reviewer phase' marker",
+        "Mode badge [data-testid=mode-badge-multi] visible on assistant message",
+        "Credits decremented by 3 (100 → 97)",
+        "Code generated (HelloWorld.jsx, App.js)"
+      ]
+    },
+    "flow_3_invite_notification": {
+      "status": "PASSED",
+      "steps_verified": [
+        "Share button [data-testid=share-btn] visible and clickable",
+        "Share dialog [data-testid=share-dialog] opens",
+        "Invite email input [data-testid=invite-email-input] works",
+        "Invite button [data-testid=invite-btn] sends invite",
+        "Toast 'Invited invitee.verify@forge.dev as editor' appears",
+        "Invitee added to collaborators list",
+        "Invitee sees notification badge [data-testid=notifications-badge] with count '1'",
+        "Notification panel [data-testid=notifications-panel] shows invite notification",
+        "Notification shows 'INVITE' kind and project name",
+        "Clicking notification navigates to project page",
+        "Badge disappears after clicking (notification marked as read)"
+      ]
+    }
+  },
+  "mocked_apis": {
+    "none": "No mocking - all LLM calls are real via EMERGENT_LLM_KEY"
+  },
+  "screenshots": [
+    ".screenshots/flow1_project_page.png",
+    ".screenshots/flow1_history_dialog.png",
+    ".screenshots/flow1_path_selected.png",
+    ".screenshots/flow1_version_compare.png",
+    ".screenshots/flow1_after_restore.png",
+    ".screenshots/flow2_multi_mode_selected.png",
+    ".screenshots/flow2_final.png",
+    ".screenshots/flow3_share_dialog.png",
+    ".screenshots/flow3_after_invite.png",
+    ".screenshots/flow3_invitee_dashboard.png",
+    ".screenshots/flow3_notification_panel.png",
+    ".screenshots/flow3_invitee_project.png",
+    ".screenshots/flow3_final.png"
+  ]
+}
