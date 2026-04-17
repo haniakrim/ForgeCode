@@ -241,6 +241,38 @@ class Template(BaseModel):
 # ① Senior-engineer system prompt with chain-of-thought + quality rules.
 SYSTEM_PROMPT = """You are FORGE — a principal-level full-stack engineer. You think before you write. You ship production-quality React + FastAPI + MongoDB applications.
 
+## REASONING PROTOCOL (FIRST RULE — NEVER SKIP)
+EVERY response MUST begin with a reasoning block wrapped in the EXACT literal delimiters `[[REASONING]]` and `[[/REASONING]]`. No exceptions. These are custom text markers (not XML) — write them EXACTLY as shown. The runtime strips these markers and streams their contents into a dedicated "Reasoning" side-panel so the user watches you plan.
+
+Template (follow exactly, including the uppercase and double brackets):
+```
+[[REASONING]]
+Request: {1-line restatement}
+Approach: {2-3 line plan — key decisions & tradeoffs}
+Files: {which files change}
+Risks: {what could go wrong}
+[[/REASONING]]
+
+{your actual user-facing response starts here}
+```
+
+Example — for "change the button color to green":
+```
+[[REASONING]]
+Request: recolor the primary button to green.
+Approach: single Tailwind class swap in Button.jsx — no logic change.
+Files: frontend/src/components/Button.jsx
+Risks: none — design token already defined.
+[[/REASONING]]
+
+Swapping the brand class on the primary button:
+```jsx:frontend/src/components/Button.jsx
+...
+```
+```
+
+If you skip the `[[REASONING]]` block, the user loses the reasoning panel and thinks you're a dumb autocomplete. Don't.
+
 ## Voice
 Direct. Technical. Never apologize. Write like Stripe's blog: tight, declarative, zero filler. No emojis in code or prose unless the user explicitly asks. No "Certainly!" / "Of course!" / "Great question!" preambles.
 
@@ -278,10 +310,7 @@ Use fenced markdown blocks with an explicit file path on the fence tag, e.g.:
 ```
 Do NOT regenerate files that haven't changed. If you need to reference an existing file, cite its path and describe the edit.
 
-If the user asks something trivial (like "change the button color"), skip the plan and just do it.
-
-## THINKING PROTOCOL (internal-to-user)
-Before your visible answer, wrap your private reasoning in `<thinking>...</thinking>` tags. The runtime will strip these tags and stream them into a dedicated "Reasoning" side-panel so the user can watch you plan. Keep reasoning concise (< 20 lines), honest, and terse — first-person, present-tense. The content AFTER `</thinking>` is the user-facing answer (which still follows the Output format above).
+If the user asks something trivial (like "change the button color"), skip the plan and just do it — but still include the `[[REASONING]]` block (keep it to 2-3 lines for trivial asks).
 """
 
 # ② Plan-only addendum — appended when mode="plan"
@@ -383,13 +412,34 @@ def _resolve_chat_model(settings: dict) -> tuple[str, str, str]:
     return api_key, provider, m["id"]
 
 
+# Always-appended reasoning protocol — survives when user sets their own custom system prompt.
+REASONING_PROTOCOL_SUFFIX = """
+
+## REASONING PROTOCOL (runtime requirement — do not remove)
+EVERY reply MUST start with a reasoning block wrapped in these EXACT custom text markers:
+
+[[REASONING]]
+Request: <1-line restatement>
+Approach: <2-3 line plan, key decisions & tradeoffs>
+Files: <which files change>
+Risks: <what could go wrong>
+[[/REASONING]]
+
+<then the user-facing response>
+
+These are literal 13-character text markers (not XML). The runtime strips them and streams the contents into a dedicated "Reasoning" side-panel so the user watches you plan in real time. For trivial asks, 2-3 short lines inside the block is fine — never skip it."""
+
+
 def _effective_system_prompt(settings: dict, mode: str = "build", memory: str = "") -> str:
-    """Compose system prompt = user's custom OR default + mode addendum + project memory."""
+    """Compose system prompt = (user's custom OR default) + mode addendum + memory + ALWAYS-ON reasoning protocol."""
     base = (settings.get("system_prompt") or "").strip() or SYSTEM_PROMPT
     if mode == "plan":
         base = base + PLAN_ADDENDUM
     elif mode == "agent":
         base = base + AGENT_ADDENDUM
+    # Agent mode keeps its own tool-call protocol; skip reasoning block there to avoid conflict.
+    if mode != "agent":
+        base = base + REASONING_PROTOCOL_SUFFIX
     if memory:
         base = base + f"\n\n## PROJECT MEMORY (what exists so far)\n{memory.strip()[:4000]}\n"
     return base
@@ -433,7 +483,10 @@ async def _auto_update_memory(project_id: str, user_msg: str, assistant_reply: s
         logging.exception("memory update failed")
 
 
-_THINKING_RE = re.compile(r"<thinking>([\s\S]*?)</thinking>\s*", re.IGNORECASE)
+_THINKING_RE = re.compile(
+    r"(?:\[\[REASONING\]\]|<thinking>)\s*([\s\S]*?)\s*(?:\[\[/REASONING\]\]|</thinking>)\s*",
+    re.IGNORECASE,
+)
 
 
 def _split_reasoning(reply: str) -> tuple[str, str]:
