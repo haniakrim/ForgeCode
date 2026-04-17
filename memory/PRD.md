@@ -90,18 +90,26 @@ FORGE is an AI full-stack app developer SaaS — a noir-editorial, developer-foc
 - 4th mode pill "Multi" in chat (costs 3 credits)
 - New SSE events: `phase_start`, `phase_end`
 
+### Phase 9 — Reasoning, Snapshots, Public Showcase (v10, iteration 10)
+- `<thinking>...</thinking>` tag protocol — LLM wraps private reasoning, backend strips and emits `reasoning` SSE event; frontend shows a floating side-panel while model plans
+- Full-project snapshots: `project_snapshots` collection + create/list/restore/delete endpoints. Restore auto-captures a safety snapshot beforehand so nothing is ever lost
+- HistoryDialog upgraded with tabs (Versions / Snapshots) and side-by-side visual diff toggle
+- Public Showcase gallery: `PUT /projects/{id}/visibility`, `GET /showcase` (no auth), `GET /showcase/{id}`, `POST /showcase/{id}/fork`
+- New `/showcase` page with editorial hero, Recent/Popular sort, one-click Fork that clones files + memory + increments source.fork_count
+- Visibility toggle drawer in project toolbar with showcase-tagline editor
+
 ## Test Coverage
-- iteration_1.json → iteration_8.json
-- Latest: **88/88 backend tests passed** (32 v9 + 27 v8 regression + 29 v7 regression)
+- iteration_1.json → iteration_10.json
+- Latest: **43/43 v10 tests passed** + prior 88/88 v8 + 3/3 v9 E2E
 - Zero open critical/minor bugs
 
 ## Known Issues
 - emergentintegrations `get_checkout_status()` Pydantic validation error on Stripe status polling (mitigated via try/except graceful fallback; webhook handles actual payment confirmation)
+- Side-by-side diff for single-line files without trailing newline produces unusual layout (difflib edge case; real multi-line code works fine)
 
 ## P1 / P2 Backlog
-- P1: Side-by-side visual diff viewer (currently unified-diff text — works but could be prettier)
-- P2: Reasoning-stream panel (show the model's `### Approach` / `### File plan` as it generates)
-- P2: Point-in-time rollback for full project snapshot (currently per-file)
-- P3: Marketplace for community system prompts
-- P3: Supabase / Firebase integration options
-- P3: Mobile-responsive layout polish for project IDE
+- P3: Community marketplace for system prompts (featured / trending prompts users can apply)
+- P3: Supabase / Firebase backend integration options
+- P3: Mobile-responsive IDE layout polish
+- P3: Showcase project detail page (`/showcase/:id`) with live Sandpack preview
+- P3: Email digest of weekly Showcase trending projects
