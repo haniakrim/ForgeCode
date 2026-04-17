@@ -48,6 +48,13 @@ FORGE is an AI full-stack app developer SaaS — a neo-brutalist, developer-focu
 - ✅ Credit system (decrements atomically)
 - ✅ 13/13 backend API tests passing, all frontend flows verified
 
+## Implemented (Feb 17, 2026 — v5: Roles + Live Presence + Expanded Sandpack)
+- ✅ **Editor vs Viewer roles** — `project_members.role = editor|viewer`. Viewers are 403-blocked from chat (REST + SSE). Owner-only `PATCH /api/projects/{id}/members/{mid}` to update role. Role-selector dropdown in ShareDialog for invites + existing members.
+- ✅ **Live presence & typing** — WebSocket `/api/ws/projects/{id}` (cookie-authenticated or `?token=`). Tracks connected users per project, broadcasts `presence`, `typing`, and `message` events. Frontend shows avatar stack + "N live" chip + "X is typing…" indicator above composer. Chat messages now appear in real-time across all connected collaborators without polling.
+- ✅ **Sandpack deps expanded + `package.json` driven** — default deps now include `react-router-dom`, `lucide-react`, `clsx`, `date-fns`, `axios`, `framer-motion`. If AI emits a `package.json` fenced block, its `dependencies` are merged (AI-declared wins). The `package.json` file itself is excluded from mounted project files.
+- ✅ **Daylight-optimized Sandpack chrome** — `.sp-daylight` / `.sp-noir` classes applied based on theme; Sandpack loading screen, preview container, error overlay, and action buttons now use the correct palette in both modes.
+- ✅ 19/19 v5 backend tests passing; all frontend flows verified.
+
 ## Implemented (Feb 17, 2026 — v4: Theme toggle + Collaboration + Sandpack)
 - ✅ **Theme toggle** — Noir ↔ Daylight, toggle in navbar (Sun/Moon icon), persists in `localStorage`. Daylight uses cream `#F4EFE5` paper with dark text; same burnt-orange brand. All pages (Landing, Dashboard, Project, Templates, Settings, Billing, Share) respond to theme via CSS variables.
 - ✅ **Real-time collaboration** (async):
