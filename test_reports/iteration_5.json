@@ -1,0 +1,96 @@
+{
+  "summary": "Completed comprehensive testing of FORGE AI v6 features: Activity log, Project files (Monaco+Yjs), Email mocking (Resend), WebSocket Yjs relay, Export with edited files. Backend: 20/20 tests passed. Frontend: All v6 features working correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_forge_v6_features.py",
+    "/app/test_reports/pytest/pytest_v6_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Activity logging correctly captures member.invited, member.role_changed, file.edited events with actor info and timestamps",
+    "Email mocking works gracefully when RESEND_API_KEY is not set - logs '[email mock]' instead of failing",
+    "Yjs WebSocket relay correctly authenticates via session cookie or ?token= query param, closes with 4401/4403 on bad auth",
+    "Export ZIP correctly includes edited files from project_files collection, overriding AI-generated blocks",
+    "Activity button correctly hidden for non-owners (viewers/editors)",
+    "StrictMode disabled in index.js to prevent WS double-mount issues - documented in comment"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_forge_v6_features.py"
+  ],
+  "success_rate": {
+    "backend": "100% (20/20 tests passed)",
+    "frontend": "100% (all v6 features working)"
+  },
+  "test_credentials": {
+    "owner_token": "test_session_v6_owner_1776416397706",
+    "owner_email": "owner_v6@forge.dev",
+    "collab_token": "test_session_v6_collab_1776416397708",
+    "collab_email": "collab_v6@forge.dev",
+    "viewer_token": "test_session_v6_viewer_1776416397709",
+    "viewer_email": "viewer_v6@forge.dev",
+    "note": "Test users cleaned up after testing"
+  },
+  "seed_data_creation": "Created owner, collaborator (editor), and viewer test users via mongosh for role-based access testing",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "v6 features fully tested: (1) Activity log: GET /projects/{id}/activity returns list sorted by created_at desc, accessible by owner/collab/viewer, 404 for non-members. Activity auto-logged for member.invited, member.role_changed, file.edited, message.sent. (2) Project files: PUT /projects/{id}/files creates/updates file with path, content, updated_at, updated_by_name. Returns 403 for viewers. GET /projects/{id}/files returns list. (3) Yjs WebSocket: /api/ws/yjs/{project_id}/{file_path} authenticates via cookie or ?token=, closes 4401/4403 on bad auth, broadcasts binary frames to peers. (4) Email mocking: When RESEND_API_KEY not set, _send_email logs '[email mock]' and returns {status:'mocked'}. (5) Export: ZIP includes edited files from project_files, overriding AI-generated blocks. (6) Frontend: Activity button (data-testid=activity-btn) owner-only, opens ActivityDialog showing events with icons/timestamps. WS status indicator shows 'live' with pulsing dot when connected, 'offline' with WifiOff icon when disconnected. Monaco editor mounts on Code tab with Yjs provider.",
+  "features_tested": {
+    "backend": [
+      "GET /api/projects/{id}/activity - owner can access",
+      "GET /api/projects/{id}/activity - collaborator (editor) can access",
+      "GET /api/projects/{id}/activity - viewer can access",
+      "GET /api/projects/{id}/activity - non-member gets 401",
+      "PUT /api/projects/{id}/files - owner can save file",
+      "PUT /api/projects/{id}/files - editor can save file",
+      "PUT /api/projects/{id}/files - viewer gets 403",
+      "GET /api/projects/{id}/files - owner can list files",
+      "GET /api/projects/{id}/files - collaborator can list files",
+      "PUT /api/projects/{id}/files - update overwrites content",
+      "POST /api/projects/{id}/invite - logs member.invited activity",
+      "PUT /api/projects/{id}/files - logs file.edited activity",
+      "POST /api/projects/{id}/invite - returns 200 without RESEND_API_KEY (mocked)",
+      "GET /api/projects/{id}/export - includes edited files from project_files",
+      "WebSocket /api/ws/yjs/{id}/{path} - rejects bad auth with close code",
+      "WebSocket /api/ws/yjs/{id}/{path} - accepts valid token",
+      "Activity entries have required fields (activity_id, project_id, event_type, created_at)",
+      "Activity sorted by created_at descending (newest first)",
+      "PATCH /api/projects/{id}/members/{mid} - logs member.role_changed activity",
+      "Non-member trying to access activity gets 404"
+    ],
+    "frontend": [
+      "Activity button [data-testid=activity-btn] visible for owner",
+      "Activity button hidden for viewer",
+      "Activity button hidden for editor (non-owner)",
+      "Share button [data-testid=share-btn] visible for owner",
+      "Share button hidden for viewer",
+      "ActivityDialog [data-testid=activity-dialog] opens on click",
+      "ActivityDialog shows activity entries with icons and timestamps",
+      "ActivityDialog shows event types: invited, role_changed, edited",
+      "WS status indicator [data-testid=ws-status] shows 'live' when connected",
+      "WS status indicator shows 'offline' with WifiOff icon when disconnected",
+      "Viewer chip visible for viewers",
+      "Chat input disabled for viewers with 'Viewers are read-only.' placeholder",
+      "Share dialog shows invite-role-select dropdown",
+      "Share dialog shows per-member role dropdowns",
+      "Share dialog shows remove buttons for members",
+      "Code tab [data-testid=tab-code] active by default",
+      "Monaco editor placeholder shows 'Awaiting instructions' when no files"
+    ]
+  },
+  "mocked_apis": {
+    "resend_email": "MOCKED - When RESEND_API_KEY is not set, _send_email logs '[email mock]' and returns {status:'mocked'} without raising errors"
+  },
+  "known_issues": {
+    "from_previous_iterations": {
+      "emergentintegrations_library_bug": "get_checkout_status() fails with Pydantic validation error - checkout creation works, status polling returns 502"
+    }
+  }
+}

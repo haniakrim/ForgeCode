@@ -4,8 +4,6 @@ import "@/index.css";
 import App from "@/App";
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+// StrictMode disabled — its synthetic unmount-remount conflicts with long-lived
+// WebSocket/Yjs connections in Project workspace. Prod build already single-mounts.
+root.render(<App />);

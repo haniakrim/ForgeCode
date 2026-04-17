@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
-import { ArrowLeft, Send, Loader2, Code2, Eye, FileCode2, Sparkles, Copy, CheckCheck, Download, Share2 } from "lucide-react";
+import { ArrowLeft, Send, Loader2, Code2, Eye, FileCode2, Sparkles, Copy, CheckCheck, Download, Share2, Wifi, WifiOff, Activity } from "lucide-react";
 import { toast } from "sonner";
 import { ShareDialog } from "../components/ShareDialog";
 import { SandpackPreview } from "../components/SandpackPreview";
+import { ActivityDialog } from "../components/ActivityDialog";
+import { MonacoYjsEditor } from "../components/MonacoYjsEditor";
 
 // ------------- Code block parser -------------
 const parseContent = (text) => {
@@ -74,6 +76,9 @@ export default function Project() {
   const [members, setMembers] = useState([]);
   const [presence, setPresence] = useState([]);
   const [typingUsers, setTypingUsers] = useState({}); // user_id -> name
+  const [wsConnected, setWsConnected] = useState(false);
+  const [activity, setActivity] = useState([]);
+  const [activityOpen, setActivityOpen] = useState(false);
   const scrollRef = useRef(null);
   const wsRef = useRef(null);
   const typingDebounceRef = useRef(null);
@@ -95,42 +100,61 @@ export default function Project() {
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [id]);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [messages]);
 
-  // WebSocket: presence + typing + real-time message broadcasts
+  // WebSocket: presence + typing + real-time broadcasts + auto-reconnect w/ backoff
   useEffect(() => {
     if (!id || !user) return;
     const backend = process.env.REACT_APP_BACKEND_URL || "";
     const wsUrl = backend.replace(/^http/, "ws") + `/api/ws/projects/${id}`;
-    let pingInterval;
+    let pingInterval, reconnectTimer;
+    let attempt = 0;
+    let closedByUs = false;
+    let currentWs = null;
 
-    const socket = new WebSocket(wsUrl);
-    wsRef.current = socket;
-    socket.onopen = () => {
-      pingInterval = setInterval(() => {
-        try { socket.send(JSON.stringify({ type: "ping" })); } catch {/* closed */}
-      }, 30000);
+    const connect = () => {
+      const socket = new WebSocket(wsUrl);
+      currentWs = socket;
+      wsRef.current = socket;
+      socket.onopen = () => {
+        attempt = 0;
+        setWsConnected(true);
+        pingInterval = setInterval(() => {
+          try { socket.send(JSON.stringify({ type: "ping" })); } catch {/* closed */}
+        }, 30000);
+      };
+      socket.onmessage = (ev) => {
+        try {
+          const m = JSON.parse(ev.data);
+          if (m.type === "error") { closedByUs = true; socket.close(); return; }
+          if (m.type === "presence") setPresence(m.users || []);
+          else if (m.type === "typing") {
+            setTypingUsers((prev) => {
+              const next = { ...prev };
+              if (m.is_typing) next[m.user_id] = m.name; else delete next[m.user_id];
+              return next;
+            });
+          } else if (m.type === "message") {
+            setMessages((list) => list.find((x) => x.message_id === m.message.message_id) ? list : [...list, m.message]);
+          }
+        } catch {/* ignore malformed */}
+      };
+      socket.onclose = () => {
+        clearInterval(pingInterval);
+        setWsConnected(false);
+        if (closedByUs) return;
+        const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+        attempt += 1;
+        reconnectTimer = setTimeout(connect, delay);
+      };
+      socket.onerror = () => { try { socket.close(); } catch {/* closed */} };
     };
-    socket.onmessage = (ev) => {
-      try {
-        const m = JSON.parse(ev.data);
-        if (m.type === "error") { socket.close(); return; }
-        if (m.type === "presence") setPresence(m.users || []);
-        else if (m.type === "typing") {
-          setTypingUsers((prev) => {
-            const next = { ...prev };
-            if (m.is_typing) next[m.user_id] = m.name; else delete next[m.user_id];
-            return next;
-          });
-        } else if (m.type === "message") {
-          setMessages((list) => list.find((x) => x.message_id === m.message.message_id) ? list : [...list, m.message]);
-        }
-      } catch {/* ignore malformed */}
-    };
-    socket.onclose = () => { clearInterval(pingInterval); };
-    socket.onerror = () => { try { socket.close(); } catch {/* already closed */} };
+
+    connect();
 
     return () => {
+      closedByUs = true;
       clearInterval(pingInterval);
-      try { socket.close(); } catch {/* already closed */}
+      clearTimeout(reconnectTimer);
+      try { currentWs?.close(); } catch {/* closed */}
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, user?.user_id]);
@@ -293,7 +317,15 @@ export default function Project() {
               </div>
             )}
             {isViewer && <span className="chip">viewer</span>}
-            <span className="chip chip-emerald pulse-dot hidden sm:inline-flex">active</span>
+            <span
+              className={`chip ${wsConnected ? "chip-emerald pulse-dot" : ""} hidden sm:inline-flex`}
+              title={wsConnected ? "Live" : "Reconnecting…"}
+              data-testid="ws-status"
+            >
+              {wsConnected ? "live" : (
+                <><WifiOff className="h-3 w-3 mr-1" strokeWidth={2} /> offline</>
+              )}
+            </span>
             <span className="chip hidden md:inline-flex">claude sonnet 4.5</span>
             <div className="chip">
               <Sparkles className="h-3 w-3 text-[var(--brand)]" strokeWidth={1.5} />
@@ -308,6 +340,17 @@ export default function Project() {
               <Download className="h-3.5 w-3.5" strokeWidth={1.8} />
               <span className="hidden md:inline">Export</span>
             </button>
+            {isOwner && (
+              <button
+                onClick={() => setActivityOpen(true)}
+                data-testid="activity-btn"
+                className="btn btn-ghost !py-1.5 !px-3 !text-xs"
+                title="Activity log"
+              >
+                <Activity className="h-3.5 w-3.5" strokeWidth={1.8} />
+                <span className="hidden md:inline">Activity</span>
+              </button>
+            )}
             {isOwner && (
               <button
                 onClick={() => setShareOpen(true)}
@@ -418,14 +461,14 @@ export default function Project() {
                   ))
                 )}
               </div>
-              <div className="flex-1 overflow-auto">
+              <div className="flex-1 overflow-hidden flex flex-col">
                 {active ? (
-                  <div className="flex">
-                    <div className="shrink-0 text-right select-none border-r border-[var(--border)] bg-black/20 px-3 py-5 mono text-xs line-numbers">
-                      {active.value.split("\n").map((_, i) => <div key={i} className="leading-6">{i + 1}</div>)}
-                    </div>
-                    <pre className="flex-1 px-5 py-5 text-xs leading-6 text-[var(--text)]"><code>{active.value}</code></pre>
-                  </div>
+                  <MonacoYjsEditor
+                    projectId={id}
+                    filePath={active.file || `${active.lang}-${activeFile + 1}`}
+                    initialContent={active.value}
+                    readOnly={isViewer}
+                  />
                 ) : (
                   <div className="flex items-center justify-center h-full p-10">
                     <div className="max-w-sm text-center">
@@ -452,6 +495,9 @@ export default function Project() {
           onClose={() => setShareOpen(false)}
           onUpdate={(updated) => setProject((p) => ({ ...p, ...updated }))}
         />
+      )}
+      {activityOpen && project && (
+        <ActivityDialog projectId={id} onClose={() => setActivityOpen(false)} />
       )}
     </div>
   );

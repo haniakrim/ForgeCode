@@ -26,6 +26,11 @@ from emergentintegrations.payments.stripe.checkout import (
     StripeCheckout, CheckoutSessionRequest
 )
 
+try:
+    import resend  # optional — transactional emails
+except ImportError:
+    resend = None
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
@@ -36,6 +41,41 @@ db = client[os.environ["DB_NAME"]]
 
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "")
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "onboarding@resend.dev")
+APP_URL = os.environ.get("APP_URL", "https://buildforge-ai.preview.emergentagent.com")
+
+if resend and RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
+
+
+async def _send_email(to_email: str, subject: str, html: str) -> dict:
+    """Graceful email helper. Logs + no-ops when RESEND not configured."""
+    if not (resend and RESEND_API_KEY):
+        logging.info(f"[email mock] → {to_email} · {subject}")
+        return {"status": "mocked", "to": to_email}
+    try:
+        params = {"from": SENDER_EMAIL, "to": [to_email], "subject": subject, "html": html}
+        email = await asyncio.to_thread(resend.Emails.send, params)
+        return {"status": "sent", "id": email.get("id")}
+    except Exception as e:
+        logging.exception("Resend send failed")
+        return {"status": "failed", "error": str(e)[:160]}
+
+
+async def _log_activity(project_id: str, actor: dict, event_type: str, detail: Optional[str] = None, meta: Optional[dict] = None):
+    """Append a row to project_activity collection."""
+    await db.project_activity.insert_one({
+        "activity_id": f"act_{uuid.uuid4().hex[:10]}",
+        "project_id": project_id,
+        "actor_user_id": actor.get("user_id"),
+        "actor_name": actor.get("name"),
+        "actor_email": actor.get("email"),
+        "event_type": event_type,  # e.g. project.shared, member.invited, member.role_changed, member.removed, file.edited, message.sent
+        "detail": detail or "",
+        "meta": meta or {},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
 
 
 # ----------------------- Live (WebSocket) presence ----------------------
@@ -366,6 +406,26 @@ async def invite_collaborator(project_id: str, payload: InviteRequest, user: Use
     }
     await db.project_members.insert_one(member)
     member.pop("_id", None)
+    await _log_activity(project_id, actor={"user_id": user.user_id, "name": user.name, "email": user.email},
+                        event_type="member.invited",
+                        detail=f"Invited {email} as {member['role']}")
+    # Fire-and-forget invite email
+    invite_link = f"{APP_URL}/project/{project_id}"
+    html = f"""
+    <div style="font-family:ui-sans-serif,system-ui;max-width:520px;margin:0 auto;padding:24px">
+      <h2 style="font-family:Georgia,serif;color:#0E0D0A;font-weight:500">You've been invited to Forge.</h2>
+      <p style="color:#484542;line-height:1.6">
+        <b>{user.name or user.email}</b> invited you to collaborate on
+        <b>{project['name']}</b> as a <b>{member['role']}</b>.
+      </p>
+      <p style="margin-top:24px">
+        <a href="{invite_link}" style="background:#F25C05;color:#fff;padding:10px 20px;border-radius:999px;text-decoration:none;font-weight:500">
+          Open project →
+        </a>
+      </p>
+      <p style="color:#7D7A72;font-size:12px;margin-top:32px">Sent by Forge · you're receiving this because your email was invited to a project.</p>
+    </div>"""
+    asyncio.create_task(_send_email(email, f"{user.name or user.email} invited you to {project['name']}", html))
     return member
 
 
@@ -384,6 +444,9 @@ async def update_member(project_id: str, member_id: str, payload: MemberUpdate,
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Member not found")
     updated = await db.project_members.find_one({"member_id": member_id}, {"_id": 0})
+    await _log_activity(project_id, actor={"user_id": user.user_id, "name": user.name, "email": user.email},
+                        event_type="member.role_changed",
+                        detail=f"Changed {updated['email']} to {payload.role}")
     return updated
 
 
@@ -475,6 +538,8 @@ async def chat(project_id: str, payload: ChatRequest, user: User = Depends(get_c
     user_doc.pop("_id", None)
     await manager.broadcast(project_id, {"type": "message", "message": user_doc, "sender": sender})
     await manager.broadcast(project_id, {"type": "message", "message": ai_doc, "sender": {"user_id": "forge", "name": "Forge"}})
+    await _log_activity(project_id, actor=sender, event_type="message.sent",
+                        detail=(payload.content[:120] + ("…" if len(payload.content) > 120 else "")))
 
     return {"message": ai_doc}
 
@@ -626,6 +691,113 @@ async def ws_project(websocket: WebSocket, project_id: str, token: Optional[str]
         await manager.broadcast(project_id, {"type": "presence", "users": manager.presence(project_id)})
 
 
+# ----------------------- Project Activity ----------------------
+@api_router.get("/projects/{project_id}/activity")
+async def list_activity(project_id: str, user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    rows = await db.project_activity.find({"project_id": project_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return rows
+
+
+# ----------------------- Project Files (editable via Monaco/Yjs) ----------------------
+class FileSave(BaseModel):
+    path: str
+    content: str
+
+
+@api_router.get("/projects/{project_id}/files")
+async def list_files(project_id: str, user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    files = await db.project_files.find({"project_id": project_id}, {"_id": 0}).to_list(500)
+    return files
+
+
+@api_router.put("/projects/{project_id}/files")
+async def save_file(project_id: str, payload: FileSave, user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("member_role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot edit")
+    now = datetime.now(timezone.utc).isoformat()
+    existing = await db.project_files.find_one(
+        {"project_id": project_id, "path": payload.path}, {"_id": 0}
+    )
+    if existing:
+        await db.project_files.update_one(
+            {"project_id": project_id, "path": payload.path},
+            {"$set": {"content": payload.content, "updated_at": now,
+                      "updated_by": user.user_id, "updated_by_name": user.name}}
+        )
+    else:
+        await db.project_files.insert_one({
+            "file_id": f"file_{uuid.uuid4().hex[:10]}",
+            "project_id": project_id,
+            "path": payload.path,
+            "content": payload.content,
+            "updated_at": now,
+            "updated_by": user.user_id,
+            "updated_by_name": user.name,
+        })
+    await _log_activity(project_id,
+                        actor={"user_id": user.user_id, "name": user.name, "email": user.email},
+                        event_type="file.edited",
+                        detail=payload.path)
+    doc = await db.project_files.find_one({"project_id": project_id, "path": payload.path}, {"_id": 0})
+    return doc
+
+
+# ----------------------- Yjs Relay WebSocket ----------------------
+_yjs_rooms: dict[str, list] = {}  # room_key -> [WebSocket, ...]
+
+
+@app.websocket("/api/ws/yjs/{project_id}/{file_path:path}")
+async def yjs_relay(websocket: WebSocket, project_id: str, file_path: str, token: Optional[str] = None):
+    """Minimal Yjs relay. Broadcasts binary updates between clients on same room.
+    No persistence — initial doc state is seeded client-side from PUT /files."""
+    await websocket.accept()
+    cookie_token = websocket.cookies.get("session_token")
+    user = await _resolve_user_from_token(cookie_token or token or "")
+    if not user:
+        await websocket.close(code=4401)
+        return
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        await websocket.close(code=4403)
+        return
+
+    room_key = f"{project_id}:{file_path}"
+    _yjs_rooms.setdefault(room_key, []).append(websocket)
+    try:
+        while True:
+            data = await websocket.receive_bytes()
+            for peer in list(_yjs_rooms.get(room_key, [])):
+                if peer is websocket:
+                    continue
+                try:
+                    await peer.send_bytes(data)
+                except Exception:
+                    try:
+                        _yjs_rooms[room_key].remove(peer)
+                    except ValueError:
+                        pass
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logging.warning(f"yjs relay error: {e}")
+    finally:
+        try:
+            _yjs_rooms[room_key].remove(websocket)
+            if not _yjs_rooms[room_key]:
+                _yjs_rooms.pop(room_key, None)
+        except (ValueError, KeyError):
+            pass
+
+
 # ----------------------- Project Export (ZIP) ----------------------
 _FENCE_RE = re.compile(r"```(\w+)?(?::([^\n]+))?\n([\s\S]*?)```")
 
@@ -661,6 +833,11 @@ async def export_project(project_id: str, user: User = Depends(get_current_user)
             body = match.group(3)
             idx += 1
             files[_safe_filename(path, idx, lang)] = body
+
+    # Project_files (edited via Monaco) override AI-generated blocks
+    edited = await db.project_files.find({"project_id": project_id}, {"_id": 0}).to_list(500)
+    for f in edited:
+        files[f["path"].lstrip("/")] = f["content"]
 
     # Build README
     readme = f"# {project['name']}\n\n{project.get('description','')}\n\n"
