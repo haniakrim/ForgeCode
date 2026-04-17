@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
-import { ArrowLeft, Send, Loader2, Code2, Eye, FileCode2, Sparkles, Copy, CheckCheck, Download } from "lucide-react";
+import { ArrowLeft, Send, Loader2, Code2, Eye, FileCode2, Sparkles, Copy, CheckCheck, Download, Share2 } from "lucide-react";
 import { toast } from "sonner";
+import { ShareDialog } from "../components/ShareDialog";
+import { SandpackPreview } from "../components/SandpackPreview";
 
 // ------------- Code block parser -------------
 const parseContent = (text) => {
@@ -23,8 +25,8 @@ const parseContent = (text) => {
 const CodeFence = ({ block }) => {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="my-3 rounded-xl overflow-hidden border border-[var(--border)] bg-black/60">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border)] bg-black/40">
+    <div className="my-3 rounded-xl overflow-hidden border border-[var(--border)] bg-[var(--surface-2)]">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border)] bg-[var(--surface)]">
         <div className="flex items-center gap-2 mono text-xs text-[var(--text-2)]">
           <FileCode2 className="h-3 w-3 text-[var(--brand)]" strokeWidth={1.5} />
           {block.file || block.lang}
@@ -68,6 +70,8 @@ export default function Project() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [tab, setTab] = useState("code");
+  const [shareOpen, setShareOpen] = useState(false);
+  const [members, setMembers] = useState([]);
   const scrollRef = useRef(null);
 
   const load = async () => {
@@ -75,6 +79,7 @@ export default function Project() {
       const { data } = await api.get(`/projects/${id}`);
       setProject(data.project);
       setMessages(data.messages);
+      setMembers(data.members || []);
     } catch {
       toast.error("Project not found");
       navigate("/dashboard");
@@ -178,34 +183,20 @@ export default function Project() {
   useEffect(() => { setActiveFile(Math.max(0, allCodeBlocks.length - 1)); }, [allCodeBlocks.length]);
   const active = allCodeBlocks[activeFile];
 
-  const previewSrcDoc = (() => {
-    const html = allCodeBlocks.find((b) => (b.file || "").match(/\.html$/i) || b.lang === "html");
-    if (html) return html.value;
-    const jsx = allCodeBlocks.find((b) => b.lang === "jsx" || b.lang === "tsx" || (b.file || "").match(/\.(j|t)sx?$/i));
-    if (jsx) {
-      return `<!DOCTYPE html><html><head><meta charset="utf-8"/><script src="https://unpkg.com/react@18/umd/react.development.js"></script><script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script><script src="https://unpkg.com/@babel/standalone/babel.min.js"></script><script src="https://cdn.tailwindcss.com"></script><style>body{font-family:ui-sans-serif,system-ui;padding:1rem;background:#fafafa}</style></head><body><div id="root"></div><script type="text/babel">
-try {
-${jsx.value.replace(/^(import|export).*$/gm, "")}
-const _Root = typeof App !== 'undefined' ? App : (typeof Component !== 'undefined' ? Component : () => <div style={{padding:20,fontFamily:'ui-monospace'}}>No default component detected.</div>);
-ReactDOM.createRoot(document.getElementById('root')).render(<_Root />);
-} catch (e) { document.getElementById('root').innerHTML = '<pre style="color:#c00;padding:1rem;font-family:ui-monospace">'+e.message+'</pre>'; }
-</script></body></html>`;
-    }
-    return `<!DOCTYPE html><html><body style="font-family:'IBM Plex Mono',monospace;background:#050505;color:#A19E98;padding:3rem;margin:0;height:100vh;display:flex;align-items:center;justify-content:center"><div style="max-width:420px"><div style="color:#F25C05;font-size:.7rem;letter-spacing:.22em;text-transform:uppercase">// preview idle</div><div style="margin-top:.75rem;font-size:1.8rem;font-family:'Playfair Display',serif;font-style:italic;color:#F2E8D5">Awaiting your instruction.</div><div style="margin-top:.75rem;font-size:.9rem">Describe what you want to build in the chat — the preview will render here.</div></div></body></html>`;
-  })();
+  const previewSrcDoc = null; // replaced by SandpackPreview
 
   if (!project) {
     return (
-      <div className="flex h-screen items-center justify-center bg-[#050505]">
+      <div className="flex h-screen items-center justify-center bg-[var(--bg)]">
         <div className="glass rounded-2xl px-8 py-6 mono text-sm text-[var(--text-2)]">Loading<span className="caret"></span></div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen flex-col bg-[#050505]">
+    <div className="flex h-screen flex-col bg-[var(--bg)]">
       {/* Floating project header */}
-      <div className="sticky top-0 z-40 border-b border-[var(--border)] bg-[#050505]/80 backdrop-blur-xl">
+      <div className="sticky top-0 z-40 border-b border-[var(--border)] bg-[var(--bg)]/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-full items-center justify-between px-5 py-3">
           <div className="flex items-center gap-4 min-w-0">
             <Link to="/dashboard" className="rounded-full border border-[var(--border)] p-2 hover:border-[var(--brand)]/40 transition-colors" data-testid="back-btn">
@@ -232,13 +223,24 @@ ReactDOM.createRoot(document.getElementById('root')).render(<_Root />);
               <Download className="h-3.5 w-3.5" strokeWidth={1.8} />
               <span className="hidden md:inline">Export</span>
             </button>
+            {project.role !== "collaborator" && (
+              <button
+                onClick={() => setShareOpen(true)}
+                data-testid="share-btn"
+                className="btn btn-primary !py-1.5 !px-3 !text-xs"
+                title="Share"
+              >
+                <Share2 className="h-3.5 w-3.5" strokeWidth={1.8} />
+                <span className="hidden md:inline">Share</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
 
       <div className="grid flex-1 overflow-hidden" style={{ gridTemplateColumns: "minmax(380px, 1fr) minmax(420px, 1.35fr)" }}>
         {/* Left: Chat */}
-        <div className="flex flex-col overflow-hidden border-r border-[var(--border)] bg-[#070707]">
+        <div className="flex flex-col overflow-hidden border-r border-[var(--border)] bg-[var(--surface-2)]">
           <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-6" data-testid="chat-scroll">
             {messages.length === 0 && (
               <div className="glass rounded-2xl p-6">
@@ -260,7 +262,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<_Root />);
               </div>
             )}
           </div>
-          <form onSubmit={send} className="border-t border-[var(--border)] p-4 bg-[#0A0A0A]" data-testid="chat-form">
+          <form onSubmit={send} className="border-t border-[var(--border)] p-4 bg-[var(--surface)]" data-testid="chat-form">
             <div className="glass rounded-2xl p-2 flex items-end gap-2">
               <textarea
                 value={input}
@@ -279,7 +281,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(<_Root />);
         </div>
 
         {/* Right: IDE / Preview */}
-        <div className="flex flex-col overflow-hidden bg-[#050505]">
+        <div className="flex flex-col overflow-hidden bg-[var(--ide-bg)]">
           <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--border)] bg-black/40">
             <div className="flex items-center gap-1">
               <button
@@ -340,18 +342,21 @@ ReactDOM.createRoot(document.getElementById('root')).render(<_Root />);
               </div>
             </div>
           ) : (
-            <div className="flex-1 p-3 bg-black/40">
-              <iframe
-                data-testid="preview-iframe"
-                srcDoc={previewSrcDoc}
-                className="h-full w-full rounded-xl border border-[var(--border)] bg-white"
-                title="preview"
-                sandbox="allow-scripts"
-              />
+            <div className="flex-1 bg-[var(--ide-bg)] overflow-hidden">
+              <SandpackPreview codeBlocks={allCodeBlocks} />
             </div>
           )}
         </div>
       </div>
+
+      {shareOpen && project && (
+        <ShareDialog
+          project={project}
+          members={members}
+          onClose={() => setShareOpen(false)}
+          onUpdate={(updated) => setProject((p) => ({ ...p, ...updated }))}
+        />
+      )}
     </div>
   );
 }

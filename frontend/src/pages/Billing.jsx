@@ -97,7 +97,7 @@ export default function Billing() {
                 data-testid={`plan-${pkg.package_id}`}
                 className={`relative rounded-3xl p-8 ${
                   meta.highlight
-                    ? "bg-[#0C0C0C] border border-[var(--brand)]/30 shadow-[0_30px_80px_-20px_rgba(242,92,5,0.3)]"
+                    ? "bg-[var(--surface)] border border-[var(--brand)]/30 shadow-[0_30px_80px_-20px_rgba(242,92,5,0.3)]"
                     : "glass"
                 }`}
               >

@@ -1,9 +1,11 @@
 import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { Coins, LogOut, Sparkles } from "lucide-react";
+import { useTheme } from "../context/ThemeContext";
+import { Coins, LogOut, Sparkles, Moon, Sun } from "lucide-react";
 
 export const Navbar = ({ variant = "app" }) => {
   const { user, logout, login } = useAuth();
+  const { theme, toggle } = useTheme();
 
   return (
     <header
@@ -39,6 +41,19 @@ export const Navbar = ({ variant = "app" }) => {
           </nav>
 
           <div className="flex items-center gap-3">
+            <button
+              onClick={toggle}
+              data-testid="theme-toggle"
+              className="rounded-full border border-[var(--border)] bg-[var(--surface-2)] p-2 hover:border-[var(--brand)] transition-colors"
+              title={theme === "noir" ? "Switch to Daylight" : "Switch to Noir"}
+              aria-label="Toggle theme"
+            >
+              {theme === "noir" ? (
+                <Sun className="h-3.5 w-3.5 text-[var(--brand)]" strokeWidth={1.8} />
+              ) : (
+                <Moon className="h-3.5 w-3.5 text-[var(--brand)]" strokeWidth={1.8} />
+              )}
+            </button>
             {user ? (
               <>
                 <div

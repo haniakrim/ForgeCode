@@ -57,13 +57,13 @@ const Hero = () => {
                   <div className="mono text-xs text-[var(--text-3)]">forge.studio / untitled-04</div>
                   <Terminal className="h-3.5 w-3.5 text-[var(--text-3)]" strokeWidth={1.5} />
                 </div>
-                <div className="rounded-2xl bg-black/50 p-5 mono text-[13px] leading-7 min-h-[340px] border border-white/5">
-                  <div className="text-[var(--text-2)]"><span className="text-[var(--brand)]">you</span> — build a recipe-sharing app with social login and a feed</div>
-                  <div className="mt-4 text-[var(--text-3)]">forge — thinking<span className="caret"></span></div>
-                  <div className="mt-3 text-[var(--text-2)]"><span className="text-[var(--emerald)]">✓</span> scaffolding react + fastapi</div>
-                  <div className="text-[var(--text-2)]"><span className="text-[var(--emerald)]">✓</span> models: recipe, user, follow, like</div>
-                  <div className="text-[var(--text-2)]"><span className="text-[var(--emerald)]">✓</span> routes: /api/recipes · /api/auth · /api/feed</div>
-                  <div className="text-[var(--text-2)]"><span className="text-[var(--emerald)]">✓</span> ui: feed · detail · composer · profile</div>
+                <div className="rounded-2xl bg-[#0A0A0A] p-5 mono text-[13px] leading-7 min-h-[340px] border border-white/5 text-[#D0CEC6]">
+                  <div><span className="text-[var(--brand)]">you</span> — build a recipe-sharing app with social login and a feed</div>
+                  <div className="mt-4 text-[#6D6A64]">forge — thinking<span className="caret"></span></div>
+                  <div className="mt-3"><span className="text-[var(--emerald)]">✓</span> scaffolding react + fastapi</div>
+                  <div><span className="text-[var(--emerald)]">✓</span> models: recipe, user, follow, like</div>
+                  <div><span className="text-[var(--emerald)]">✓</span> routes: /api/recipes · /api/auth · /api/feed</div>
+                  <div><span className="text-[var(--emerald)]">✓</span> ui: feed · detail · composer · profile</div>
                   <div className="mt-4 text-[var(--gold)]">→ shipped in 38s · preview → localhost:3000</div>
                 </div>
               </div>
@@ -226,7 +226,7 @@ const Pricing = () => {
               data-testid={`pricing-${t.name.toLowerCase()}`}
               className={`relative rounded-3xl p-8 ${
                 t.highlight
-                  ? "bg-[#0C0C0C] border border-[var(--brand)]/30 shadow-[0_30px_80px_-20px_rgba(242,92,5,0.3)]"
+                  ? "bg-[var(--surface)] border border-[var(--brand)]/30 shadow-[0_30px_80px_-20px_rgba(242,92,5,0.3)]"
                   : "glass"
               }`}
             >

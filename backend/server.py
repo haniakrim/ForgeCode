@@ -70,6 +70,7 @@ class Project(BaseModel):
     name: str
     description: str = ""
     stack: str = "react-fastapi"
+    public: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -78,6 +79,16 @@ class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = ""
     stack: Optional[str] = "react-fastapi"
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    public: Optional[bool] = None
+
+
+class InviteRequest(BaseModel):
+    email: str
 
 
 class Message(BaseModel):
@@ -217,10 +228,32 @@ async def logout(request: Request, response: Response):
 
 
 # ----------------------- Projects ----------------------
+async def _user_can_access_project(project_id: str, user: User) -> Optional[dict]:
+    """Returns the project doc if user is owner or collaborator, else None."""
+    project = await db.projects.find_one({"project_id": project_id}, {"_id": 0})
+    if not project:
+        return None
+    if project["user_id"] == user.user_id:
+        return project
+    membership = await db.project_members.find_one(
+        {"project_id": project_id, "email": user.email}, {"_id": 0}
+    )
+    return project if membership else None
+
+
 @api_router.get("/projects")
 async def list_projects(user: User = Depends(get_current_user)):
-    cursor = db.projects.find({"user_id": user.user_id}, {"_id": 0}).sort("updated_at", -1)
+    # Projects user owns + projects user is a collaborator on
+    memberships = await db.project_members.find({"email": user.email}, {"_id": 0}).to_list(200)
+    shared_ids = [m["project_id"] for m in memberships]
+    cursor = db.projects.find(
+        {"$or": [{"user_id": user.user_id}, {"project_id": {"$in": shared_ids}}]},
+        {"_id": 0}
+    ).sort("updated_at", -1)
     projects = await cursor.to_list(100)
+    # Attach role
+    for p in projects:
+        p["role"] = "owner" if p["user_id"] == user.user_id else "collaborator"
     return projects
 
 
@@ -232,34 +265,93 @@ async def create_project(payload: ProjectCreate, user: User = Depends(get_curren
     doc["created_at"] = doc["created_at"].isoformat()
     doc["updated_at"] = doc["updated_at"].isoformat()
     await db.projects.insert_one(doc)
-    doc.pop("_id", None)  # Remove MongoDB ObjectId before returning
+    doc.pop("_id", None)
     return doc
 
 
 @api_router.get("/projects/{project_id}")
 async def get_project(project_id: str, user: User = Depends(get_current_user)):
-    project = await db.projects.find_one(
-        {"project_id": project_id, "user_id": user.user_id}, {"_id": 0}
-    )
+    project = await _user_can_access_project(project_id, user)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     msgs_cursor = db.messages.find({"project_id": project_id}, {"_id": 0}).sort("created_at", 1)
     messages = await msgs_cursor.to_list(1000)
-    return {"project": project, "messages": messages}
+    members = await db.project_members.find({"project_id": project_id}, {"_id": 0}).to_list(50)
+    project["role"] = "owner" if project["user_id"] == user.user_id else "collaborator"
+    return {"project": project, "messages": messages, "members": members}
+
+
+@api_router.patch("/projects/{project_id}")
+async def update_project(project_id: str, payload: ProjectUpdate, user: User = Depends(get_current_user)):
+    project = await db.projects.find_one({"project_id": project_id, "user_id": user.user_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found or not owner")
+    updates = {k: v for k, v in payload.model_dump(exclude_none=True).items()}
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.projects.update_one({"project_id": project_id}, {"$set": updates})
+    updated = await db.projects.find_one({"project_id": project_id}, {"_id": 0})
+    return updated
+
+
+@api_router.post("/projects/{project_id}/invite")
+async def invite_collaborator(project_id: str, payload: InviteRequest, user: User = Depends(get_current_user)):
+    project = await db.projects.find_one({"project_id": project_id, "user_id": user.user_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found or not owner")
+    email = payload.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="Invalid email")
+    if email == user.email.lower():
+        raise HTTPException(status_code=400, detail="You are the owner")
+    existing = await db.project_members.find_one(
+        {"project_id": project_id, "email": email}, {"_id": 0}
+    )
+    if existing:
+        return {"already_invited": True, "email": email}
+    member = {
+        "member_id": f"mem_{uuid.uuid4().hex[:10]}",
+        "project_id": project_id,
+        "email": email,
+        "invited_by": user.user_id,
+        "invited_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.project_members.insert_one(member)
+    member.pop("_id", None)
+    return member
+
+
+@api_router.delete("/projects/{project_id}/members/{member_id}")
+async def remove_member(project_id: str, member_id: str, user: User = Depends(get_current_user)):
+    project = await db.projects.find_one({"project_id": project_id, "user_id": user.user_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found or not owner")
+    res = await db.project_members.delete_one({"member_id": member_id, "project_id": project_id})
+    return {"removed": res.deleted_count}
+
+
+@api_router.get("/share/{project_id}")
+async def get_shared_project(project_id: str):
+    """Public read-only view of a project if public=true. No auth required."""
+    project = await db.projects.find_one({"project_id": project_id, "public": True}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found or private")
+    msgs_cursor = db.messages.find({"project_id": project_id}, {"_id": 0}).sort("created_at", 1)
+    messages = await msgs_cursor.to_list(1000)
+    owner = await db.users.find_one({"user_id": project["user_id"]}, {"_id": 0, "name": 1, "picture": 1})
+    return {"project": project, "messages": messages, "owner": owner or {}}
 
 
 @api_router.delete("/projects/{project_id}")
 async def delete_project(project_id: str, user: User = Depends(get_current_user)):
     res = await db.projects.delete_one({"project_id": project_id, "user_id": user.user_id})
     await db.messages.delete_many({"project_id": project_id})
+    await db.project_members.delete_many({"project_id": project_id})
     return {"deleted": res.deleted_count}
 
 
 @api_router.post("/projects/{project_id}/chat")
 async def chat(project_id: str, payload: ChatRequest, user: User = Depends(get_current_user)):
-    project = await db.projects.find_one(
-        {"project_id": project_id, "user_id": user.user_id}, {"_id": 0}
-    )
+    project = await _user_can_access_project(project_id, user)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     if user.credits <= 0:
@@ -318,9 +410,7 @@ async def chat_stream(project_id: str, payload: ChatRequest, user: User = Depend
     """SSE endpoint that streams the assistant reply token-by-token.
     We call the LLM once (emergentintegrations returns a full response) then stream
     it word-by-word to give real-time UX. Both user + assistant messages are persisted."""
-    project = await db.projects.find_one(
-        {"project_id": project_id, "user_id": user.user_id}, {"_id": 0}
-    )
+    project = await _user_can_access_project(project_id, user)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     if user.credits <= 0:
@@ -404,9 +494,7 @@ def _safe_filename(name: str, idx: int, lang: str) -> str:
 
 @api_router.get("/projects/{project_id}/export")
 async def export_project(project_id: str, user: User = Depends(get_current_user)):
-    project = await db.projects.find_one(
-        {"project_id": project_id, "user_id": user.user_id}, {"_id": 0}
-    )
+    project = await _user_can_access_project(project_id, user)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
+import { ThemeProvider } from "./context/ThemeContext";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { Toaster } from "sonner";
 
@@ -12,6 +13,7 @@ import Templates from "./pages/Templates";
 import Settings from "./pages/Settings";
 import Billing from "./pages/Billing";
 import BillingSuccess from "./pages/BillingSuccess";
+import Share from "./pages/Share";
 import AuthCallback from "./pages/AuthCallback";
 
 function AppRouter() {
@@ -29,6 +31,7 @@ function AppRouter() {
       <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
       <Route path="/billing" element={<ProtectedRoute><Billing /></ProtectedRoute>} />
       <Route path="/billing/success" element={<ProtectedRoute><BillingSuccess /></ProtectedRoute>} />
+      <Route path="/share/:id" element={<Share />} />
     </Routes>
   );
 }
@@ -40,23 +43,25 @@ function App() {
   return (
     <div className="App">
       <BrowserRouter>
-        <AuthProvider>
-          <AppRouter />
-          <Toaster
-            position="bottom-right"
-            theme="dark"
-            toastOptions={{
-              style: {
-                background: "rgba(18,18,18,0.95)",
-                backdropFilter: "blur(24px)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                borderRadius: "14px",
-                fontFamily: "Outfit, sans-serif",
-                color: "#F2E8D5",
-              },
-            }}
-          />
-        </AuthProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <AppRouter />
+            <Toaster
+              position="bottom-right"
+              theme="dark"
+              toastOptions={{
+                style: {
+                  background: "rgba(18,18,18,0.95)",
+                  backdropFilter: "blur(24px)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  borderRadius: "14px",
+                  fontFamily: "Outfit, sans-serif",
+                  color: "#F2E8D5",
+                },
+              }}
+            />
+          </AuthProvider>
+        </ThemeProvider>
       </BrowserRouter>
     </div>
   );

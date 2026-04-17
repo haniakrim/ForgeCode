@@ -34,7 +34,7 @@ export default function AuthCallback() {
   }, [navigate, setUser]);
 
   return (
-    <div className="flex h-screen items-center justify-center bg-[#050505]">
+    <div className="flex h-screen items-center justify-center bg-[var(--bg)]">
       <div className="glass rounded-2xl p-12 text-center">
         <div className="overline">authenticating</div>
         <div className="serif mt-3 text-3xl">
