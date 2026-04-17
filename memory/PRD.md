@@ -48,6 +48,17 @@ FORGE is an AI full-stack app developer SaaS — a neo-brutalist, developer-focu
 - ✅ Credit system (decrements atomically)
 - ✅ 13/13 backend API tests passing, all frontend flows verified
 
+## Implemented (Feb 17, 2026 — v4: Theme toggle + Collaboration + Sandpack)
+- ✅ **Theme toggle** — Noir ↔ Daylight, toggle in navbar (Sun/Moon icon), persists in `localStorage`. Daylight uses cream `#F4EFE5` paper with dark text; same burnt-orange brand. All pages (Landing, Dashboard, Project, Templates, Settings, Billing, Share) respond to theme via CSS variables.
+- ✅ **Real-time collaboration** (async):
+  - Public share links — owner toggles `public: true` to expose `/share/{project_id}` read-only (no auth required)
+  - Email invites — owner invites collaborators by email; collaborators see the project in their dashboard, can chat (their own credits are deducted)
+  - New collections: `project_members`
+  - New endpoints: `PATCH /api/projects/{id}`, `POST /api/projects/{id}/invite`, `DELETE /api/projects/{id}/members/{mid}`, `GET /api/share/{project_id}` (no auth)
+  - Share button on project page (owner only) opens ShareDialog with public toggle + copy-link + invite form + member list
+- ✅ **Sandpack multi-file preview** — replaced the old single-file Babel iframe with `@codesandbox/sandpack-react`. JSX/TSX/JS/TS/CSS/JSON/HTML files get mounted into a real React bundler with npm deps. Editor hidden via CSS so only the live preview pane shows.
+- ✅ 21/21 backend tests passing; all frontend flows verified.
+
 ## Implemented (Feb 17, 2026 — v3: SSE + Export + Stripe + Mobile Contrast)
 - ✅ `POST /api/projects/{id}/chat/stream` — SSE endpoint streams Claude's reply token-by-token (events: `user` / `token` / `done`). Persists both messages, deducts 1 credit.
 - ✅ `GET /api/projects/{id}/export` — bundles all assistant code fences into a ZIP (with README), preserves file paths from `:path` annotations.
