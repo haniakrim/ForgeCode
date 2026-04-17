@@ -1,0 +1,113 @@
+{
+  "theme": "light",
+  "archetype": "4 - Swiss & High-Contrast",
+  "design_concept": "The Terminal Architect: A neo-brutalist, high-contrast, developer-first aesthetic. Rejects the soft, glowing 'magic AI' trope. Embraces raw structure, visible borders, and industrial precision.",
+  "colors": {
+    "background": "#F4F4F0",
+    "surface": "#FFFFFF",
+    "surface_ide": "#0A0A0A",
+    "text_primary": "#0A0A0A",
+    "text_secondary": "#555555",
+    "text_ide": "#E0E0E0",
+    "primary_accent": "#FF3311",
+    "secondary_accent": "#0033FF",
+    "border": "#0A0A0A",
+    "success": "#00FF00",
+    "warning": "#FFD700",
+    "error": "#FF3311"
+  },
+  "typography": {
+    "headings": {
+      "family": "Cabinet Grotesk, sans-serif",
+      "weights": ["800", "900"],
+      "tracking": "tracking-tighter",
+      "usage": "Use for all H1-H4. Never center align. Use uppercase for overlines."
+    },
+    "body": {
+      "family": "JetBrains Mono, monospace",
+      "weights": ["400", "500"],
+      "tracking": "tracking-normal",
+      "usage": "Use for all body text, UI labels, chat interface, and code editor."
+    }
+  },
+  "layout_and_spacing": {
+    "spacing_scale": "Generous (p-8, p-12, p-16)",
+    "border_radius": "rounded-none",
+    "borders": "border-2 border-black",
+    "shadows": "shadow-[4px_4px_0px_#0A0A0A] hover:shadow-[6px_6px_0px_#0A0A0A] transition-shadow",
+    "grids": {
+      "marketing": "Asymmetric bento, grid-cols-12, gap-8",
+      "app": "Split-screen control room, tight gap-0, separated by 2px black borders"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-[#FF3311] text-white border-2 border-black rounded-none shadow-[4px_4px_0px_#0A0A0A] hover:shadow-[6px_6px_0px_#0A0A0A] hover:-translate-y-0.5 transition-all uppercase tracking-widest font-bold",
+      "secondary": "bg-white text-black border-2 border-black rounded-none shadow-[4px_4px_0px_#0A0A0A] hover:shadow-[6px_6px_0px_#0A0A0A] hover:-translate-y-0.5 transition-all uppercase tracking-widest font-bold"
+    },
+    "inputs": {
+      "style": "bg-white border-2 border-black rounded-none p-4 font-mono text-black focus:ring-0 focus:border-[#FF3311] focus:shadow-[4px_4px_0px_#FF3311] transition-all"
+    },
+    "cards": {
+      "style": "bg-white border-2 border-black rounded-none p-8 shadow-[4px_4px_0px_#0A0A0A]"
+    },
+    "chat_interface": {
+      "user_message": "bg-white border-2 border-black p-4 ml-8 rounded-none shadow-[2px_2px_0px_#0A0A0A]",
+      "ai_message": "bg-[#F4F4F0] border-2 border-black border-l-8 border-l-[#FF3311] p-4 mr-8 rounded-none"
+    },
+    "code_editor": {
+      "style": "bg-[#0A0A0A] text-[#E0E0E0] p-6 font-mono border-2 border-black overflow-y-auto h-full"
+    }
+  },
+  "motion_and_interactions": {
+    "hover_states": "Hard offset shadow increases, slight -translate-y-0.5, strict and mechanical transitions (ease-out 0.15s).",
+    "page_transitions": "Instant or very fast structural reveals. No soft cross-fades.",
+    "active_states": "translate-y-1 shadow-[0px_0px_0px_#0A0A0A] (pressed down physical button effect)."
+  },
+  "icons_and_assets": {
+    "library": "lucide-react for UI, react-icons/si (SimpleIcons) for tech stack/sponsor logos (SiReact, SiTailwindcss, SiVercel, SiGithub).",
+    "style": "Sharp, stroke-width 2, unrounded if possible."
+  },
+  "media": {
+    "hero_abstract_wireframe": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/899390f2-096a-4402-932c-48615ca48a3c/images/3e4873032272c8a54cf44f4d8a531df95755b1713351fbfd729ec6ce32af9832.png",
+      "description": "Architectural wireframe for hero section background or graphic element.",
+      "category": "hero"
+    },
+    "feature_ide_concept": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/899390f2-096a-4402-932c-48615ca48a3c/images/46ae3ea8372a00af8efcbad38e667ed7843762a4013bbe9e36a383dd70a4f2af.png",
+      "description": "Minimalist terminal concept for 'How it works' or features bento grid.",
+      "category": "feature"
+    },
+    "pattern_texture": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/899390f2-096a-4402-932c-48615ca48a3c/images/b5fdea62debe3e9d2547a2271e265626fe8de4c3723288a630d3950018981ffc.png",
+      "description": "Subtle paper grain/blueprint texture to overlay on the light background (`mix-blend-multiply` with low opacity).",
+      "category": "background"
+    },
+    "testimonial_avatar_1": {
+      "url": "https://images.unsplash.com/photo-1576558656222-ba66febe3dec?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjd8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3NjQwOTM4NHww&ixlib=rb-4.1.0&q=85",
+      "description": "Testimonial user avatar 1",
+      "category": "avatar"
+    },
+    "testimonial_avatar_2": {
+      "url": "https://images.unsplash.com/photo-1769636929388-99eff95d3bf1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjd8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3NjQwOTM4NHww&ixlib=rb-4.1.0&q=85",
+      "description": "Testimonial user avatar 2",
+      "category": "avatar"
+    },
+    "testimonial_avatar_3": {
+      "url": "https://images.unsplash.com/photo-1762522926157-bcc04bf0b10a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjd8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc3NjQwOTM4NHww&ixlib=rb-4.1.0&q=85",
+      "description": "Testimonial user avatar 3",
+      "category": "avatar"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Use Cabinet Grotesk for all headings. Use JetBrains Mono for all body text, buttons, and editor elements.",
+    "Implement a strict Neo-Brutalist design: 2px black borders on ALL containers, cards, and inputs. No rounded corners (rounded-none).",
+    "Use hard offset shadows (e.g., 4px 4px 0px #0A0A0A) for interactive elements instead of soft blurs.",
+    "For the App/IDE view, create a split-screen layout using CSS Grid or Flexbox with a heavy resizable-looking black divider. Left pane is the AI Chat (light theme), right pane is the Code/Preview (dark theme, #0A0A0A).",
+    "Do NOT use placeholder text for logos. Use react-icons/si (SimpleIcons) like SiReact, SiVercel, SiGithub for the sponsor/stack section.",
+    "Overlay 'pattern_texture' image on the main background with opacity-20 and mix-blend-multiply to break the digital flatness.",
+    "Include data-testid attributes on all interactive elements.",
+    "Use Shadcn UI components but strip away their default border-radius, soft shadows, and default fonts. Override them to be sharp, bordered, and mono-spaced where applicable."
+  ]
+}
