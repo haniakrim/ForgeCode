@@ -1,0 +1,83 @@
+{
+  "summary": "Completed comprehensive backend testing of FORGE v8 Agent Cognition features: ① Senior-engineer system prompt (REGRESSION - chat still works), ② Plan-then-Build mode, ③ Self-critique review endpoint, ④ Agentic tool-use loop, ⑤ Per-project auto-maintained memory. All 27 v8 tests + 29 v7 regression tests passed (56 total).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_forge_v8_agent_cognition.py",
+    "/app/test_reports/pytest/pytest_v8_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "SYSTEM_PROMPT rewrite: Chat streaming with mode='build' (default) works correctly - streams valid assistant reply and persists to messages collection",
+    "Plan mode: POST /chat/stream with mode='plan' streams SSE events, final 'done' event contains message with mode='plan', reply starts with '### Goal' per PLAN_ADDENDUM format, NO code fences in output",
+    "Build mode: POST with mode='build' produces replies that may contain code fences (as expected)",
+    "Agent mode: POST with mode='agent' streams agent_step and tool_result SSE events, write_file tool creates files in db.project_files, max 5 rounds enforced",
+    "Invalid mode fallback: ChatRequest with invalid mode (e.g. 'xyz') falls back to 'build' without error",
+    "Review endpoint: POST /review with no files returns 400 'No code to review yet', with files returns {review: string, files_reviewed: int} with review >200 chars, debits 1 credit, logs 'code.reviewed' activity",
+    "Memory GET: Returns {project_id, content:''} for new project",
+    "Memory PUT: Persists content and returns it, viewer role correctly blocked with 403",
+    "Memory injection: Memory content injected into system prompt - chat with memory doesn't 500",
+    "Agent tool parser: _parse_agent_tools regex correctly extracts <tool name='list_files' />, <tool name='read_file' path='x.js' />, <tool name='write_file' path='y.js'>content</tool>, <tool name='done' />",
+    "Agent tool executor: list_files/read_file/write_file/done all return {ok: true/false, ...}",
+    "All 29 v7 tests still pass (settings, integrations, deploys, export, presence, Stripe, activity)"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_forge_v8_agent_cognition.py"
+  ],
+  "success_rate": {
+    "backend": "100% (27/27 v8 tests + 29/29 v7 regression tests = 56/56 total)"
+  },
+  "test_credentials": {
+    "v8_session_token": "test_session_v8_<timestamp>",
+    "v8_user_id": "test-user-v8-<timestamp>",
+    "v8_project_id": "prj_test_v8_<timestamp>",
+    "v8_viewer_session_token": "test_viewer_session_v8_<timestamp>",
+    "note": "Test users cleaned up after testing via pytest fixture"
+  },
+  "seed_data_creation": "Created test user + session + project + viewer member via mongosh for authenticated endpoint testing",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "v8 Agent Cognition features fully tested: (1) SYSTEM_PROMPT rewritten for principal-engineer CoT - chat streaming still works, persists messages. (2) Plan mode (mode='plan') produces plan-only output starting with '### Goal', NO code fences. (3) Build mode (mode='build') may contain code fences. (4) Agent mode (mode='agent') streams agent_step and tool_result SSE events, executes list_files/read_file/write_file/done tools, max 5 rounds enforced. (5) Review endpoint POST /review returns 400 if no files, otherwise returns {review, files_reviewed} with review >200 chars, debits 1 credit, logs 'code.reviewed' activity. (6) Memory GET returns {project_id, content:''} for new project. (7) Memory PUT persists content, viewer role blocked with 403. (8) Memory injected into system prompt - chat doesn't 500. (9) Invalid mode falls back to 'build'. (10) All v7 features (models, settings, integrations, deploys) continue to work.",
+  "features_tested": {
+    "backend": [
+      "POST /api/projects/{id}/chat/stream mode='build' - streams valid reply, persists message (REGRESSION)",
+      "POST /api/projects/{id}/chat/stream mode='plan' - streams SSE, final message has mode='plan', starts with '### Goal', NO code fences",
+      "POST /api/projects/{id}/chat/stream mode='build' - may contain code fences",
+      "POST /api/projects/{id}/chat/stream mode='agent' - streams agent_step and tool_result events",
+      "Agent mode - write_file tool creates file in db.project_files",
+      "Agent mode - max 5 rounds enforced (doesn't loop forever)",
+      "Invalid mode 'xyz' - falls back to 'build' without error",
+      "POST /api/projects/{id}/review - no files returns 400 'No code to review yet'",
+      "POST /api/projects/{id}/review - with files returns {review: string, files_reviewed: int}",
+      "POST /api/projects/{id}/review - review length > 200 chars",
+      "POST /api/projects/{id}/review - debits 1 credit",
+      "POST /api/projects/{id}/review - logs activity event 'code.reviewed'",
+      "GET /api/projects/{id}/memory - new project returns {project_id, content:''}",
+      "PUT /api/projects/{id}/memory - persists content and returns it",
+      "PUT /api/projects/{id}/memory - viewer role returns 403",
+      "Memory injected into system prompt - chat with memory doesn't 500",
+      "GET /api/projects/{id}/export - works (regression)",
+      "GET /api/projects/{id}/activity - works (regression)",
+      "GET /api/settings - works (regression)",
+      "GET /api/models - returns 7 models (regression)",
+      "GET /api/payments/packages - works (regression)",
+      "POST /api/projects/{id}/invite - works (regression)",
+      "GET /api/projects/{id}/files - works (regression)"
+    ]
+  },
+  "mocked_apis": {
+    "none": "No mocking - all LLM calls are real via EMERGENT_LLM_KEY through emergentintegrations"
+  },
+  "known_issues": {
+    "from_previous_iterations": {
+      "emergentintegrations_library_bug": "get_checkout_status() fails with Pydantic validation error - checkout creation works, status polling returns 502"
+    }
+  }
+}

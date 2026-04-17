@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
-import { ArrowLeft, Send, Loader2, Code2, Eye, FileCode2, Sparkles, Copy, CheckCheck, Download, Share2, Wifi, WifiOff, Activity } from "lucide-react";
+import { ArrowLeft, Send, Loader2, Code2, Eye, FileCode2, Sparkles, Copy, CheckCheck, Download, Share2, WifiOff, Activity, NotebookPen, Hammer, Bot, ClipboardCheck, Brain, X } from "lucide-react";
 import { DeployMenu } from "../components/DeployMenu";
 import { toast } from "sonner";
 import { ShareDialog } from "../components/ShareDialog";
@@ -47,18 +47,43 @@ const CodeFence = ({ block }) => {
   );
 };
 
-const MessageBlock = ({ msg }) => {
+const MODE_META = {
+  plan:  { label: "plan",  color: "text-[var(--gold)]",    bg: "bg-[var(--gold)]/8 border-[var(--gold)]/25" },
+  build: { label: "build", color: "text-[var(--emerald)]", bg: "bg-[var(--emerald)]/8 border-[var(--emerald)]/25" },
+  agent: { label: "agent", color: "text-[var(--brand)]",   bg: "bg-[var(--brand)]/8 border-[var(--brand)]/25" },
+};
+
+const MessageBlock = ({ msg, onApprove }) => {
   const parts = parseContent(msg.content);
   const isUser = msg.role === "user";
+  const meta = !isUser && msg.mode ? MODE_META[msg.mode] : null;
+  const showApprove = !isUser && msg.mode === "plan" && msg.content && !msg.content.startsWith("[FORGE");
   return (
     <div data-testid={`msg-${msg.role}`} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div className={`max-w-[88%] ${isUser ? "rounded-2xl rounded-br-md bg-[var(--brand)]/12 border border-[var(--brand)]/25 px-4 py-3" : "glass rounded-2xl rounded-bl-md px-4 py-3"}`}>
-        <div className={`overline mb-1.5 ${isUser ? "!text-[var(--brand-hover)]" : ""}`}>{isUser ? "you" : "forge"}</div>
+        <div className={`overline mb-1.5 flex items-center gap-2 ${isUser ? "!text-[var(--brand-hover)]" : ""}`}>
+          <span>{isUser ? "you" : "forge"}</span>
+          {meta && (
+            <span data-testid={`mode-badge-${msg.mode}`} className={`px-1.5 py-[1px] rounded-full border text-[9px] uppercase tracking-widest ${meta.bg} ${meta.color}`}>
+              {meta.label}
+            </span>
+          )}
+        </div>
         <div className="text-[15px] leading-relaxed whitespace-pre-wrap text-[var(--text)]">
           {parts.map((p, i) =>
             p.type === "text" ? <span key={i}>{p.value}</span> : <CodeFence key={i} block={p} />
           )}
         </div>
+        {showApprove && (
+          <button
+            data-testid="approve-build-btn"
+            onClick={() => onApprove?.(msg)}
+            className="btn btn-primary mt-3 !py-1.5 !px-3 !text-xs"
+          >
+            <CheckCheck className="h-3.5 w-3.5" strokeWidth={2} />
+            Approve &amp; build
+          </button>
+        )}
       </div>
     </div>
   );
@@ -81,6 +106,12 @@ export default function Project() {
   const [activity, setActivity] = useState([]);
   const [activityOpen, setActivityOpen] = useState(false);
   const [modelLabel, setModelLabel] = useState("");
+  const [mode, setMode] = useState("build"); // "plan" | "build" | "agent"
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewText, setReviewText] = useState("");
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [memoryDoc, setMemoryDoc] = useState("");
   const scrollRef = useRef(null);
   const wsRef = useRef(null);
   const typingDebounceRef = useRef(null);
@@ -185,14 +216,17 @@ export default function Project() {
     typingDebounceRef.current = setTimeout(() => sendTyping(false), 2500);
   };
 
-  const send = async (e) => {
-    e?.preventDefault();
-    if (!input.trim() || sending) return;
-    const text = input;
-    setInput("");
+  const send = async (e, opts = {}) => {
+    e?.preventDefault?.();
+    const override = opts.content;
+    const overrideMode = opts.mode;
+    const text = (override ?? input).trim();
+    const activeMode = overrideMode || mode;
+    if (!text || sending) return;
+    if (!override) setInput("");
     setSending(true);
     const userTmp = { message_id: "tmp-u", role: "user", content: text, created_at: new Date().toISOString() };
-    const aiTmp = { message_id: "tmp-a", role: "assistant", content: "", created_at: new Date().toISOString() };
+    const aiTmp = { message_id: "tmp-a", role: "assistant", content: "", created_at: new Date().toISOString(), mode: activeMode };
     setMessages((m) => [...m, userTmp, aiTmp]);
 
     try {
@@ -200,7 +234,7 @@ export default function Project() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: text }),
+        body: JSON.stringify({ content: text, mode: activeMode }),
       });
       if (!resp.ok || !resp.body) {
         const err = await resp.json().catch(() => ({}));
@@ -217,7 +251,6 @@ export default function Project() {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        // Parse SSE events separated by \n\n
         const events = buffer.split("\n\n");
         buffer = events.pop() || "";
         for (const ev of events) {
@@ -234,10 +267,15 @@ export default function Project() {
           if (type === "token") {
             streamed += parsed.t ?? "";
             setMessages((m) => m.map((x) => x.message_id === "tmp-a" ? { ...x, content: streamed } : x));
+          } else if (type === "tool_result") {
+            // Agent mode: append a compact tool trace line to the message
+            const line = `\n\n<tool ran="${parsed.tool?.name}" path="${parsed.tool?.path || ''}">${parsed.result?.ok ? 'ok' : (parsed.result?.error || 'failed')}</tool>`;
+            streamed += line;
+            setMessages((m) => m.map((x) => x.message_id === "tmp-a" ? { ...x, content: streamed } : x));
           } else if (type === "done") {
             setMessages((m) => m.map((x) => {
               if (x.message_id === "tmp-u") return { ...userTmp, message_id: "done-u" };
-              if (x.message_id === "tmp-a") return parsed.message;
+              if (x.message_id === "tmp-a") return { ...parsed.message, mode: activeMode };
               return x;
             }));
             refresh();
@@ -249,6 +287,34 @@ export default function Project() {
       setMessages((m) => m.filter((x) => x.message_id !== "tmp-u" && x.message_id !== "tmp-a"));
     } finally {
       setSending(false);
+    }
+  };
+
+  const approveAndBuild = (planMsg) => {
+    send(null, {
+      content: `Approve the plan above and build it now.\n\nFor reference, here was your plan:\n${(planMsg.content || "").slice(0, 3500)}`,
+      mode: "build",
+    });
+  };
+
+  const runReview = async () => {
+    setReviewBusy(true); setReviewOpen(true); setReviewText("");
+    try {
+      const r = await api.post(`/projects/${id}/review`);
+      setReviewText(r.data.review || "(no review returned)");
+      refresh();
+    } catch (err) {
+      setReviewText(`**Review failed.** ${err?.response?.data?.detail || err.message}`);
+    } finally { setReviewBusy(false); }
+  };
+
+  const openMemory = async () => {
+    setMemoryOpen(true);
+    try {
+      const r = await api.get(`/projects/${id}/memory`);
+      setMemoryDoc(r.data.content || "");
+    } catch {
+      setMemoryDoc("(failed to load memory)");
     }
   };
 
@@ -354,6 +420,24 @@ export default function Project() {
               <span className="hidden md:inline">Export</span>
             </button>
             <DeployMenu projectId={id} />
+            <button
+              onClick={runReview}
+              data-testid="review-btn"
+              className="btn btn-ghost !py-1.5 !px-3 !text-xs"
+              title="Self-critique review"
+            >
+              <ClipboardCheck className="h-3.5 w-3.5" strokeWidth={1.8} />
+              <span className="hidden md:inline">Review</span>
+            </button>
+            <button
+              onClick={openMemory}
+              data-testid="memory-btn"
+              className="btn btn-ghost !py-1.5 !px-3 !text-xs"
+              title="Project memory"
+            >
+              <Brain className="h-3.5 w-3.5" strokeWidth={1.8} />
+              <span className="hidden md:inline">Memory</span>
+            </button>
             {isOwner && (
               <button
                 onClick={() => setActivityOpen(true)}
@@ -391,7 +475,7 @@ export default function Project() {
                 <div className="mt-2 text-sm text-[var(--text-2)]">Be specific or vague — we&apos;re fluent in both.</div>
               </div>
             )}
-            {messages.map((m, i) => <MessageBlock key={m.message_id || i} msg={m} />)}
+            {messages.map((m, i) => <MessageBlock key={m.message_id || i} msg={m} onApprove={approveAndBuild} />)}
             {sending && (
               <div className="flex justify-start">
                 <div className="glass rounded-2xl rounded-bl-md px-4 py-3">
@@ -420,7 +504,12 @@ export default function Project() {
                 value={input}
                 onChange={handleInputChange}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-                placeholder={isViewer ? "Viewers are read-only." : "Describe changes, features, fixes..."}
+                placeholder={
+                  isViewer ? "Viewers are read-only."
+                  : mode === "plan"  ? "Describe the feature — I'll return a plan for you to approve."
+                  : mode === "agent" ? "Describe the task — I'll read & write files autonomously."
+                  : "Describe changes, features, fixes..."
+                }
                 rows={2}
                 disabled={isViewer}
                 data-testid="chat-input"
@@ -429,6 +518,38 @@ export default function Project() {
               <button type="submit" disabled={sending || !input.trim() || isViewer} data-testid="send-btn" className="btn btn-primary !rounded-xl self-stretch !px-4">
                 {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" strokeWidth={1.8} />}
               </button>
+            </div>
+            {/* Mode selector — Plan · Build · Agent */}
+            <div className="mt-2 flex items-center gap-1" data-testid="mode-selector">
+              {[
+                { id: "plan",  label: "Plan",  Icon: NotebookPen,   desc: "Plan only — you approve before building." },
+                { id: "build", label: "Build", Icon: Hammer,        desc: "Generate code directly (default)." },
+                { id: "agent", label: "Agent", Icon: Bot,           desc: "Autonomous: reads & writes files in a loop." },
+              ].map(({ id, label, Icon, desc }) => {
+                const active = mode === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    data-testid={`mode-${id}`}
+                    title={desc}
+                    onClick={() => setMode(id)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] transition-all ${
+                      active
+                        ? "border-[var(--brand)] bg-[var(--brand)]/10 text-[var(--text)]"
+                        : "border-[var(--border)] text-[var(--text-3)] hover:text-[var(--text-2)] hover:border-[var(--text-3)]"
+                    }`}
+                  >
+                    <Icon className="h-3 w-3" strokeWidth={1.8} />
+                    {label}
+                  </button>
+                );
+              })}
+              <span className="ml-auto text-[10px] text-[var(--text-3)] mono">
+                {mode === "plan" && "→ plan-first"}
+                {mode === "build" && "→ direct build"}
+                {mode === "agent" && "→ autonomous · max 5 rounds"}
+              </span>
             </div>
           </form>
         </div>
@@ -513,6 +634,72 @@ export default function Project() {
       {activityOpen && project && (
         <ActivityDialog projectId={id} onClose={() => setActivityOpen(false)} />
       )}
+      {reviewOpen && (
+        <DrawerDialog
+          title="Code review"
+          subtitle="Principal-level critique of the project so far"
+          onClose={() => setReviewOpen(false)}
+          testid="review-dialog"
+        >
+          {reviewBusy ? (
+            <div className="flex items-center gap-2 text-sm text-[var(--text-2)]">
+              <Loader2 className="h-4 w-4 animate-spin text-[var(--brand)]" strokeWidth={1.8} />
+              <span className="italic-serif">reviewing…</span>
+            </div>
+          ) : (
+            <div className="prose prose-invert max-w-none text-sm whitespace-pre-wrap leading-relaxed" data-testid="review-body">
+              {reviewText || "(no review returned)"}
+            </div>
+          )}
+        </DrawerDialog>
+      )}
+      {memoryOpen && (
+        <DrawerDialog
+          title="Project memory"
+          subtitle="What Forge remembers across turns"
+          onClose={() => setMemoryOpen(false)}
+          testid="memory-dialog"
+        >
+          {memoryDoc ? (
+            <pre className="text-xs whitespace-pre-wrap leading-relaxed text-[var(--text-2)] font-mono" data-testid="memory-body">{memoryDoc}</pre>
+          ) : (
+            <div className="text-sm text-[var(--text-3)] italic-serif">
+              Memory is empty — it fills in automatically as you build. Or use the API to set it manually.
+            </div>
+          )}
+        </DrawerDialog>
+      )}
+    </div>
+  );
+}
+
+/* ---------- inline drawer/dialog used by Review + Memory ---------- */
+function DrawerDialog({ title, subtitle, onClose, testid, children }) {
+  return (
+    <div
+      className="fixed inset-0 z-[60] bg-black/60 backdrop-blur-sm flex justify-end"
+      onClick={onClose}
+      data-testid={testid}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-[620px] h-full bg-[var(--bg)] border-l border-[var(--border)] overflow-y-auto animate-in slide-in-from-right duration-200"
+      >
+        <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-[var(--border)] bg-[var(--bg)]/95 backdrop-blur-xl">
+          <div>
+            <div className="overline !text-[var(--text-3)]">{subtitle}</div>
+            <div className="serif text-2xl mt-1" style={{ fontWeight: 500 }}>{title}</div>
+          </div>
+          <button
+            onClick={onClose}
+            data-testid={`${testid}-close`}
+            className="rounded-full border border-[var(--border)] p-2 hover:border-[var(--brand)]/40 transition-colors"
+          >
+            <X className="h-3.5 w-3.5" strokeWidth={1.8} />
+          </button>
+        </div>
+        <div className="p-6">{children}</div>
+      </div>
     </div>
   );
 }

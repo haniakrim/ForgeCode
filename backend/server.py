@@ -198,6 +198,7 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     content: str
+    mode: Optional[str] = "build"  # "plan" | "build" | "agent"
 
 
 class Template(BaseModel):
@@ -209,17 +210,122 @@ class Template(BaseModel):
 
 
 # ----------------------- Auth -------------------------
-SYSTEM_PROMPT = """You are FORGE, an elite AI full-stack app developer. You generate production-ready web applications using React + FastAPI + MongoDB.
+# ① Senior-engineer system prompt with chain-of-thought + quality rules.
+SYSTEM_PROMPT = """You are FORGE — a principal-level full-stack engineer. You think before you write. You ship production-quality React + FastAPI + MongoDB applications.
 
-Your personality: direct, technical, confident. You write clean, modern code. You never apologize unnecessarily. You speak like a senior engineer.
+## Voice
+Direct. Technical. Never apologize. Write like Stripe's blog: tight, declarative, zero filler. No emojis in code or prose unless the user explicitly asks. No "Certainly!" / "Of course!" / "Great question!" preambles.
 
-When the user describes an app idea:
-1. Acknowledge the idea in 1 short sentence.
-2. Output a plan (3-5 bullets) of what you'll build.
-3. Generate runnable code using fenced markdown blocks (```jsx, ```python, ```css) with clear file path comments like `// frontend/src/App.js`.
-4. Keep responses focused — do NOT regenerate unchanged files.
+## Your reasoning process (internal — always, even if not shown)
+Before writing a single line of code, silently complete these steps:
+1. **Restate** the user's request in one sentence so you're solving the real problem.
+2. **Edge cases** — what can go wrong? auth? empty state? network failure? concurrency? viewport?
+3. **Approach** — pick one. If there are 2+ viable approaches, note the tradeoff in 1 line, then commit.
+4. **File plan** — list exactly which files you will create or modify, nothing else.
+5. **Then** write the code.
 
-Use Tailwind CSS, shadcn/ui components, and lucide-react icons on frontend. Use FastAPI + motor + pydantic on backend. Always prefix backend routes with /api."""
+## Quality rules (non-negotiable)
+- **No hardcoded URLs or secrets.** Frontend uses `process.env.REACT_APP_BACKEND_URL`; backend uses `os.environ[...]`. Omit fallback defaults so missing config fails loud.
+- **All backend routes prefixed with `/api`.**
+- **Every interactive element has a `data-testid`** in kebab-case describing function (e.g. `data-testid="login-submit-btn"`). This is how tests find them.
+- **Components stay small (<100 lines).** Split when they grow. No God-components.
+- **Exclude `_id`** from every MongoDB response (use `{"_id": 0}` projection).
+- **Use `datetime.now(timezone.utc)`** — never `datetime.utcnow()` (deprecated). Store ISO strings.
+- **Trust framework guarantees.** Don't wrap everything in try/except. Validate only at system boundaries.
+- **No dead code, no commented-out blocks, no "// TODO later".** Ship or don't ship.
+- **Don't refactor unrequested code.** A bug fix doesn't touch surrounding files.
+
+## Stack conventions
+- **Frontend**: React functional components, Tailwind utility classes, shadcn/ui primitives from `components/ui/`, `lucide-react` icons (never emoji icons), `sonner` for toasts, `axios` for HTTP.
+- **Backend**: FastAPI + `motor` (async MongoDB) + `pydantic` v2. Use `APIRouter(prefix="/api")`. Return Pydantic models, not raw dicts.
+- **State**: React hooks only. No Redux unless the app is clearly multi-page stateful.
+
+## Output format
+Use fenced markdown blocks with an explicit file path on the fence tag, e.g.:
+```jsx:frontend/src/App.js
+// ... code ...
+```
+```python:backend/server.py
+# ... code ...
+```
+Do NOT regenerate files that haven't changed. If you need to reference an existing file, cite its path and describe the edit.
+
+If the user asks something trivial (like "change the button color"), skip the plan and just do it.
+"""
+
+# ② Plan-only addendum — appended when mode="plan"
+PLAN_ADDENDUM = """
+
+## MODE: PLAN-ONLY
+
+You are in **planning mode**. Output a crisp plan — NO CODE. Structure exactly:
+
+### Goal
+(1 sentence — what we're actually building)
+
+### Approach
+(2-4 bullets — architecture decisions + key tradeoffs)
+
+### File plan
+| File | Action | Purpose |
+|---|---|---|
+| ... | create/edit | ... |
+
+### Risks & assumptions
+(1-3 bullets — what could break, what you're assuming)
+
+### Out of scope
+(1-2 bullets — what you're intentionally NOT building this turn)
+
+End with: `When you click "Approve & build" I'll generate the code.`
+"""
+
+# ④ Agent-mode addendum — added when mode="agent". Tool-use via XML tags.
+AGENT_ADDENDUM = """
+
+## MODE: AGENT (autonomous tool use)
+
+You have tools. Call them by emitting XML-ish tags on their own lines.
+
+Available tools:
+<tool name="list_files" />
+<tool name="read_file" path="relative/path.js" />
+<tool name="write_file" path="relative/path.js">FULL FILE CONTENT HERE</tool>
+<tool name="done" />
+
+**Protocol**: In each turn, think briefly (1-2 sentences), then emit ONE OR MORE tool calls. After you emit tools, stop — the runtime will execute them and give you back the results, then you continue.
+
+Rules:
+- Before writing a file, consider reading it first if it already exists.
+- Write complete files — never partial snippets or diffs.
+- Emit `<tool name="done" />` when the user's request is fully satisfied.
+- Max 5 tool-use rounds per request — be efficient.
+- If a tool fails, read the error, correct, retry. Don't loop forever.
+"""
+
+# ③ Review rubric — used by /review endpoint to self-critique generated code
+REVIEW_PROMPT = """You are a senior code reviewer. Grade the code below against this rubric, then output a structured review.
+
+### Rubric (1-5 each)
+- **Correctness** — does it work, handle edges?
+- **Security** — no hardcoded secrets, input validation, auth checks?
+- **Conventions** — follows the stack norms (React hooks, /api prefix, data-testid, env vars, no _id leak)?
+- **Maintainability** — small components, clear naming, no dead code?
+- **UX** — loading/empty/error states, accessibility, responsiveness?
+
+### Output format (markdown)
+**Overall score: X/25**
+
+**Wins**
+- (what's genuinely good — 2-4 bullets)
+
+**Issues** (ranked by severity)
+- 🔴 `path:line` — (critical issue)
+- 🟠 `path:line` — (should fix)
+- 🟡 `path:line` — (nit)
+
+**Suggested next actions** (3 bullets max, specific & actionable)
+"""
 
 
 async def _get_user_settings(user_id: str) -> dict:
@@ -246,9 +352,54 @@ def _resolve_chat_model(settings: dict) -> tuple[str, str, str]:
     return api_key, provider, m["id"]
 
 
-def _effective_system_prompt(settings: dict) -> str:
-    custom = (settings.get("system_prompt") or "").strip()
-    return custom or SYSTEM_PROMPT
+def _effective_system_prompt(settings: dict, mode: str = "build", memory: str = "") -> str:
+    """Compose system prompt = user's custom OR default + mode addendum + project memory."""
+    base = (settings.get("system_prompt") or "").strip() or SYSTEM_PROMPT
+    if mode == "plan":
+        base = base + PLAN_ADDENDUM
+    elif mode == "agent":
+        base = base + AGENT_ADDENDUM
+    if memory:
+        base = base + f"\n\n## PROJECT MEMORY (what exists so far)\n{memory.strip()[:4000]}\n"
+    return base
+
+
+# ⑤ Project memory — auto-maintained summary of what's been built
+async def _get_project_memory(project_id: str) -> str:
+    doc = await db.project_memory.find_one({"project_id": project_id}, {"_id": 0})
+    return (doc or {}).get("content", "") if doc else ""
+
+
+async def _set_project_memory(project_id: str, content: str):
+    await db.project_memory.update_one(
+        {"project_id": project_id},
+        {"$set": {"content": content[:8000],
+                  "updated_at": datetime.now(timezone.utc).isoformat()},
+         "$setOnInsert": {"project_id": project_id,
+                          "created_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+
+
+async def _auto_update_memory(project_id: str, user_msg: str, assistant_reply: str,
+                              api_key: str, provider: str, model_id: str):
+    """Fire-and-forget: ask the LLM to compress the last turn into project memory delta."""
+    try:
+        prev = await _get_project_memory(project_id)
+        chat = LlmChat(
+            api_key=api_key, session_id=f"{project_id}:memory",
+            system_message=("Compress multi-turn engineering conversation into a terse bullet-point memory doc. "
+                            "Keep ONLY: architecture decisions, files/modules created, open TODOs, known risks. "
+                            "Max 40 lines total. Markdown bullets. No filler."),
+        ).with_model(provider, model_id)
+        prompt = (f"[Previous memory]\n{prev or '(empty — first turn)'}\n\n"
+                  f"[User just asked]\n{user_msg[:1500]}\n\n"
+                  f"[Assistant just answered]\n{assistant_reply[:4000]}\n\n"
+                  "Return the UPDATED memory doc (replace previous entirely).")
+        new_memory = await chat.send_message(UserMessage(text=prompt))
+        await _set_project_memory(project_id, new_memory)
+    except Exception:
+        logging.exception("memory update failed")
 
 
 async def get_current_user(request: Request) -> User:
@@ -545,10 +696,12 @@ async def chat(project_id: str, payload: ChatRequest, user: User = Depends(get_c
     try:
         usettings = await _get_user_settings(user.user_id)
         api_key, provider, model_id = _resolve_chat_model(usettings)
-        sys_msg = _effective_system_prompt(usettings)
+        memory = await _get_project_memory(project_id)
+        mode = payload.mode if payload.mode in ("plan", "build", "agent") else "build"
+        sys_msg = _effective_system_prompt(usettings, mode=mode, memory=memory)
         chat_client = LlmChat(
             api_key=api_key,
-            session_id=project_id,
+            session_id=f"{project_id}:{mode}",
             system_message=sys_msg,
         ).with_model(provider, model_id)
 
@@ -615,42 +768,63 @@ async def chat_stream(project_id: str, payload: ChatRequest, user: User = Depend
         # Send initial user ack
         yield f"event: user\ndata: {json.dumps(user_doc)}\n\n"
 
-        # Call LLM (full response, then chunk for streaming UX)
-        try:
-            history_cursor = db.messages.find({"project_id": project_id}, {"_id": 0}).sort("created_at", 1)
-            history = await history_cursor.to_list(200)
+        mode = payload.mode if payload.mode in ("plan", "build", "agent") else "build"
+        usettings = await _get_user_settings(user.user_id)
+        api_key, provider, model_id = _resolve_chat_model(usettings)
+        memory = await _get_project_memory(project_id)
+        sys_msg = _effective_system_prompt(usettings, mode=mode, memory=memory)
 
-            usettings = await _get_user_settings(user.user_id)
-            api_key, provider, model_id = _resolve_chat_model(usettings)
-            sys_msg = _effective_system_prompt(usettings)
+        reply = ""
+        try:
             chat_client = LlmChat(
                 api_key=api_key,
-                session_id=project_id,
+                session_id=f"{project_id}:{mode}",
                 system_message=sys_msg,
             ).with_model(provider, model_id)
 
+            history_cursor = db.messages.find({"project_id": project_id}, {"_id": 0}).sort("created_at", 1)
+            history = await history_cursor.to_list(200)
             prompt = payload.content
             if len([m for m in history if m["role"] == "user"]) <= 1:
                 preamble = f"[Project: {project['name']}]\n[Stack: {project.get('stack','react-fastapi')}]\n\n"
                 prompt = preamble + payload.content
 
-            reply = await chat_client.send_message(UserMessage(text=prompt))
+            if mode == "agent":
+                # ④ Agentic tool-use loop. Max 5 rounds.
+                transcript_parts = []
+                for round_idx in range(5):
+                    step_reply = await chat_client.send_message(UserMessage(text=prompt))
+                    transcript_parts.append(step_reply)
+                    yield f"event: agent_step\ndata: {json.dumps({'round': round_idx, 'reply': step_reply})}\n\n"
+                    tool_calls = _parse_agent_tools(step_reply)
+                    if not tool_calls or any(t['name'] == 'done' for t in tool_calls):
+                        break
+                    tool_results = []
+                    for tc in tool_calls:
+                        result = await _execute_agent_tool(project_id, user, tc)
+                        tool_results.append({"tool": tc, "result": result})
+                        yield f"event: tool_result\ndata: {json.dumps({'tool': tc, 'result': result})}\n\n"
+                    prompt = ("Tool results from your last call(s):\n\n"
+                              + json.dumps(tool_results, indent=2)[:6000]
+                              + "\n\nContinue. Emit more tool calls or <tool name=\"done\" /> if finished.")
+                reply = "\n\n---\n\n".join(transcript_parts)
+            else:
+                reply = await chat_client.send_message(UserMessage(text=prompt))
         except Exception as e:
             logging.exception("LLM stream error")
             reply = f"[FORGE Error] Unable to reach model: {str(e)[:200]}"
 
         # Chunk by ~ whitespace groups for smooth streaming
         tokens = re.findall(r"\s+|\S+", reply)
-        accumulated = ""
         for tok in tokens:
-            accumulated += tok
             yield f"event: token\ndata: {json.dumps({'t': tok})}\n\n"
-            await asyncio.sleep(0.012)
+            await asyncio.sleep(0.008 if mode == "agent" else 0.012)
 
-        # Persist final assistant message
+        # Persist final assistant message (tag the mode in metadata)
         ai_msg = Message(project_id=project_id, role="assistant", content=reply)
         ai_doc = ai_msg.model_dump()
         ai_doc["created_at"] = ai_doc["created_at"].isoformat()
+        ai_doc["mode"] = mode
         await db.messages.insert_one(ai_doc)
         ai_doc.pop("_id", None)
 
@@ -664,6 +838,11 @@ async def chat_stream(project_id: str, payload: ChatRequest, user: User = Depend
         sender = {"user_id": user.user_id, "name": user.name, "email": user.email, "picture": user.picture}
         await manager.broadcast(project_id, {"type": "message", "message": user_doc, "sender": sender})
         await manager.broadcast(project_id, {"type": "message", "message": ai_doc, "sender": {"user_id": "forge", "name": "Forge"}})
+
+        # ⑤ Fire-and-forget memory refresh (skip for plan mode — planning isn't building yet)
+        if mode in ("build", "agent") and reply and not reply.startswith("[FORGE Error]"):
+            asyncio.create_task(_auto_update_memory(
+                project_id, payload.content, reply, api_key, provider, model_id))
 
         yield f"event: done\ndata: {json.dumps({'message': ai_doc})}\n\n"
 
@@ -1538,6 +1717,138 @@ async def netlify_deploy(project_id: str, payload: NetlifyDeployRequest,
     return {"ok": True, "provider": "netlify", "url": deploy_url,
             "site_id": site_id, "deploy_id": deploy_doc.get("id"),
             "state": deploy_doc.get("state"), "files_deployed": len(files)}
+
+
+# ----------------------- Agent tool parser + executor ----------------------
+_TOOL_RE = re.compile(
+    r'<tool\s+name="(?P<name>[a-z_]+)"(?:\s+path="(?P<path>[^"]+)")?\s*(?:/>|>(?P<body>[\s\S]*?)</tool>)',
+    re.IGNORECASE,
+)
+
+
+def _parse_agent_tools(reply: str) -> list[dict]:
+    """Extract <tool .../> calls from an agent-mode LLM reply."""
+    out = []
+    for m in _TOOL_RE.finditer(reply or ""):
+        out.append({
+            "name": m.group("name").lower(),
+            "path": m.group("path") or None,
+            "body": m.group("body") or None,
+        })
+    return out
+
+
+async def _execute_agent_tool(project_id: str, user: User, tc: dict) -> dict:
+    """Execute one tool call and return a JSON-serialisable result dict."""
+    name = tc.get("name")
+    path = (tc.get("path") or "").lstrip("/")
+    body = tc.get("body") or ""
+    try:
+        if name == "list_files":
+            docs = await db.project_files.find({"project_id": project_id}, {"_id": 0}).to_list(500)
+            return {"ok": True, "files": [{"path": d["path"], "size": len(d.get("content", ""))} for d in docs]}
+        if name == "read_file":
+            if not path:
+                return {"ok": False, "error": "path required"}
+            doc = await db.project_files.find_one({"project_id": project_id, "path": path}, {"_id": 0})
+            if not doc:
+                return {"ok": False, "error": f"file not found: {path}"}
+            content = doc.get("content", "")
+            return {"ok": True, "path": path, "content": content[:8000],
+                    "truncated": len(content) > 8000}
+        if name == "write_file":
+            if not path:
+                return {"ok": False, "error": "path required"}
+            now = datetime.now(timezone.utc).isoformat()
+            await db.project_files.update_one(
+                {"project_id": project_id, "path": path},
+                {"$set": {"content": body, "updated_at": now,
+                          "updated_by": user.user_id, "updated_by_name": user.name},
+                 "$setOnInsert": {"file_id": f"file_{uuid.uuid4().hex[:10]}",
+                                  "project_id": project_id, "path": path}},
+                upsert=True,
+            )
+            await _log_activity(project_id,
+                                actor={"user_id": user.user_id, "name": user.name, "email": user.email},
+                                event_type="file.edited",
+                                detail=f"{path} (agent)")
+            return {"ok": True, "path": path, "bytes": len(body)}
+        if name == "done":
+            return {"ok": True, "done": True}
+        return {"ok": False, "error": f"unknown tool: {name}"}
+    except Exception as e:
+        logging.exception(f"tool {name} failed")
+        return {"ok": False, "error": str(e)[:200]}
+
+
+# ----------------------- Code review (③ self-critique) ----------------------
+@api_router.post("/projects/{project_id}/review")
+async def review_project(project_id: str, user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if user.credits <= 0:
+        raise HTTPException(status_code=402, detail="Out of credits")
+    files = await _collect_project_files(project_id)
+    if not files:
+        raise HTTPException(status_code=400, detail="No code to review yet — generate something first.")
+
+    # Concat all files with clear separators; truncate to keep under context budget.
+    body_parts, total = [], 0
+    for path, content in sorted(files.items()):
+        snippet = f"\n\n===== {path} =====\n{content}"
+        if total + len(snippet) > 20000:
+            body_parts.append(f"\n\n...[{len(files) - len(body_parts)} more files truncated for review]")
+            break
+        body_parts.append(snippet)
+        total += len(snippet)
+    code_body = "".join(body_parts)
+
+    usettings = await _get_user_settings(user.user_id)
+    api_key, provider, model_id = _resolve_chat_model(usettings)
+    try:
+        chat_client = LlmChat(
+            api_key=api_key, session_id=f"{project_id}:review",
+            system_message=REVIEW_PROMPT,
+        ).with_model(provider, model_id)
+        review = await chat_client.send_message(
+            UserMessage(text=f"Review this project named '{project['name']}'. {len(files)} files total.\n{code_body}")
+        )
+    except Exception as e:
+        logging.exception("review error")
+        raise HTTPException(status_code=502, detail=f"Review failed: {str(e)[:200]}")
+
+    await db.users.update_one({"user_id": user.user_id}, {"$inc": {"credits": -1}})
+    await _log_activity(project_id,
+                        actor={"user_id": user.user_id, "name": user.name, "email": user.email},
+                        event_type="code.reviewed",
+                        detail=f"Reviewed {len(files)} files")
+    return {"review": review, "files_reviewed": len(files)}
+
+
+# ----------------------- Project memory (⑤) ----------------------
+class MemoryUpdate(BaseModel):
+    content: str
+
+
+@api_router.get("/projects/{project_id}/memory")
+async def get_memory(project_id: str, user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    doc = await db.project_memory.find_one({"project_id": project_id}, {"_id": 0})
+    return doc or {"project_id": project_id, "content": ""}
+
+
+@api_router.put("/projects/{project_id}/memory")
+async def update_memory(project_id: str, payload: MemoryUpdate, user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("member_role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot edit memory")
+    await _set_project_memory(project_id, payload.content or "")
+    return await get_memory(project_id, user)
 
 
 # ----------------------- Templates ----------------------
