@@ -77,19 +77,31 @@ FORGE is an AI full-stack app developer SaaS — a noir-editorial, developer-foc
 - `/api/projects/{id}/memory` GET/PUT + auto-maintenance
 - Agentic XML tool-use loop (list_files / read_file / write_file / done)
 
+### Phase 8 — Time travel + Collaboration polish (v9, iteration 8)
+- `project_file_versions` collection — content-idempotent snapshots on every save (user + agent)
+- `GET /api/projects/{id}/files/history` (list) + `GET /files/version/{id}` (read)
+- `GET /api/projects/{id}/files/diff?path=X&a=&b=` — unified diff text
+- `POST /api/projects/{id}/files/restore` — point-in-time rollback
+- `HistoryDialog` component — files / versions / compare-A-vs-B grid with Restore
+- `notifications` collection + `_notify()` helper; emits on invite / review / deploy / push
+- `GET /api/notifications`, `POST /api/notifications/read` endpoints
+- `NotificationBell` component in Navbar (unread badge, polls every 30s, mark-all-read)
+- Multi-agent orchestration: `POST /api/projects/{id}/multi-agent/stream` chains Planner → Coder → Reviewer as 3 sequential LLM calls with role-specific system-prompt suffixes
+- 4th mode pill "Multi" in chat (costs 3 credits)
+- New SSE events: `phase_start`, `phase_end`
+
 ## Test Coverage
-- iteration_1.json → iteration_7.json
-- Latest: **56/56 backend tests passed** (27 v8 + 29 v7 regression)
+- iteration_1.json → iteration_8.json
+- Latest: **88/88 backend tests passed** (32 v9 + 27 v8 regression + 29 v7 regression)
 - Zero open critical/minor bugs
 
 ## Known Issues
 - emergentintegrations `get_checkout_status()` Pydantic validation error on Stripe status polling (mitigated via try/except graceful fallback; webhook handles actual payment confirmation)
 
 ## P1 / P2 Backlog
-- P1: Per-turn diff view ("what changed") in code pane
-- P1: File rollback / point-in-time history
-- P2: Visual plan editor (drag-drop file list before approving)
-- P2: Multi-agent orchestration (planner + coder + reviewer as separate LLM calls)
-- P2: In-app notification bell (for invites, reviews, deploys)
+- P1: Side-by-side visual diff viewer (currently unified-diff text — works but could be prettier)
+- P2: Reasoning-stream panel (show the model's `### Approach` / `### File plan` as it generates)
+- P2: Point-in-time rollback for full project snapshot (currently per-file)
 - P3: Marketplace for community system prompts
-- P3: Supabase/Firebase integration options
+- P3: Supabase / Firebase integration options
+- P3: Mobile-responsive layout polish for project IDE
