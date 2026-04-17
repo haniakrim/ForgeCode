@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
-import { ArrowLeft, Send, Loader2, Code2, Eye, FileCode2, Sparkles, Copy, CheckCheck, Download, Share2, WifiOff, Activity, NotebookPen, Hammer, Bot, ClipboardCheck, Brain, X } from "lucide-react";
+import { ArrowLeft, Send, Loader2, Code2, Eye, FileCode2, Sparkles, Copy, CheckCheck, Download, Share2, WifiOff, Activity, NotebookPen, Hammer, Bot, ClipboardCheck, Brain, X, History, Users2 } from "lucide-react";
 import { DeployMenu } from "../components/DeployMenu";
+import { HistoryDialog } from "../components/HistoryDialog";
 import { toast } from "sonner";
 import { ShareDialog } from "../components/ShareDialog";
 import { SandpackPreview } from "../components/SandpackPreview";
@@ -51,6 +52,7 @@ const MODE_META = {
   plan:  { label: "plan",  color: "text-[var(--gold)]",    bg: "bg-[var(--gold)]/8 border-[var(--gold)]/25" },
   build: { label: "build", color: "text-[var(--emerald)]", bg: "bg-[var(--emerald)]/8 border-[var(--emerald)]/25" },
   agent: { label: "agent", color: "text-[var(--brand)]",   bg: "bg-[var(--brand)]/8 border-[var(--brand)]/25" },
+  multi: { label: "multi-agent", color: "text-white",      bg: "bg-white/8 border-white/20" },
 };
 
 const MessageBlock = ({ msg, onApprove }) => {
@@ -112,6 +114,7 @@ export default function Project() {
   const [reviewText, setReviewText] = useState("");
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [memoryDoc, setMemoryDoc] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
   const scrollRef = useRef(null);
   const wsRef = useRef(null);
   const typingDebounceRef = useRef(null);
@@ -230,11 +233,14 @@ export default function Project() {
     setMessages((m) => [...m, userTmp, aiTmp]);
 
     try {
-      const resp = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/projects/${id}/chat/stream`, {
+      const endpoint = activeMode === "multi"
+        ? `/api/projects/${id}/multi-agent/stream`
+        : `/api/projects/${id}/chat/stream`;
+      const resp = await fetch(`${process.env.REACT_APP_BACKEND_URL}${endpoint}`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: text, mode: activeMode }),
+        body: JSON.stringify({ content: text, mode: activeMode === "multi" ? "build" : activeMode }),
       });
       if (!resp.ok || !resp.body) {
         const err = await resp.json().catch(() => ({}));
@@ -272,6 +278,13 @@ export default function Project() {
             const line = `\n\n<tool ran="${parsed.tool?.name}" path="${parsed.tool?.path || ''}">${parsed.result?.ok ? 'ok' : (parsed.result?.error || 'failed')}</tool>`;
             streamed += line;
             setMessages((m) => m.map((x) => x.message_id === "tmp-a" ? { ...x, content: streamed } : x));
+          } else if (type === "phase_start") {
+            // Multi-agent: phase transition marker
+            const banner = `\n\n### ▸ ${parsed.phase} phase\n`;
+            streamed += banner;
+            setMessages((m) => m.map((x) => x.message_id === "tmp-a" ? { ...x, content: streamed } : x));
+          } else if (type === "phase_end") {
+            /* no-op — phase_start already marks the transition */
           } else if (type === "done") {
             setMessages((m) => m.map((x) => {
               if (x.message_id === "tmp-u") return { ...userTmp, message_id: "done-u" };
@@ -438,6 +451,15 @@ export default function Project() {
               <Brain className="h-3.5 w-3.5" strokeWidth={1.8} />
               <span className="hidden md:inline">Memory</span>
             </button>
+            <button
+              onClick={() => setHistoryOpen(true)}
+              data-testid="history-btn"
+              className="btn btn-ghost !py-1.5 !px-3 !text-xs"
+              title="File history & rollback"
+            >
+              <History className="h-3.5 w-3.5" strokeWidth={1.8} />
+              <span className="hidden md:inline">History</span>
+            </button>
             {isOwner && (
               <button
                 onClick={() => setActivityOpen(true)}
@@ -508,6 +530,7 @@ export default function Project() {
                   isViewer ? "Viewers are read-only."
                   : mode === "plan"  ? "Describe the feature — I'll return a plan for you to approve."
                   : mode === "agent" ? "Describe the task — I'll read & write files autonomously."
+                  : mode === "multi" ? "Planner → Coder → Reviewer will each take a pass (3 credits)."
                   : "Describe changes, features, fixes..."
                 }
                 rows={2}
@@ -525,6 +548,7 @@ export default function Project() {
                 { id: "plan",  label: "Plan",  Icon: NotebookPen,   desc: "Plan only — you approve before building." },
                 { id: "build", label: "Build", Icon: Hammer,        desc: "Generate code directly (default)." },
                 { id: "agent", label: "Agent", Icon: Bot,           desc: "Autonomous: reads & writes files in a loop." },
+                { id: "multi", label: "Multi", Icon: Users2,        desc: "Planner → Coder → Reviewer relay (3 credits)." },
               ].map(({ id, label, Icon, desc }) => {
                 const active = mode === id;
                 return (
@@ -549,6 +573,7 @@ export default function Project() {
                 {mode === "plan" && "→ plan-first"}
                 {mode === "build" && "→ direct build"}
                 {mode === "agent" && "→ autonomous · max 5 rounds"}
+                {mode === "multi" && "→ planner → coder → reviewer"}
               </span>
             </div>
           </form>
@@ -668,6 +693,9 @@ export default function Project() {
             </div>
           )}
         </DrawerDialog>
+      )}
+      {historyOpen && (
+        <HistoryDialog projectId={id} onClose={() => setHistoryOpen(false)} />
       )}
     </div>
   );

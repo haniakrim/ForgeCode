@@ -92,6 +92,34 @@ async def _log_activity(project_id: str, actor: dict, event_type: str, detail: O
     })
 
 
+# ----------------------- In-app notifications ----------------------
+async def _notify(user_id: str, kind: str, title: str,
+                  body: str = "", project_id: Optional[str] = None,
+                  link: Optional[str] = None, meta: Optional[dict] = None):
+    """Insert a notification row for `user_id`. No-ops on empty user_id."""
+    if not user_id:
+        return
+    await db.notifications.insert_one({
+        "notification_id": f"ntf_{uuid.uuid4().hex[:12]}",
+        "user_id": user_id,
+        "kind": kind,  # invite | review | deploy | push | role | restored | system
+        "title": title,
+        "body": body[:500],
+        "project_id": project_id,
+        "link": link,
+        "meta": meta or {},
+        "read": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+async def _notify_by_email(email: str, **kwargs):
+    """Resolve user by email then notify. Used for invites where user may not exist yet."""
+    u = await db.users.find_one({"email": email.lower()}, {"_id": 0, "user_id": 1})
+    if u:
+        await _notify(u["user_id"], **kwargs)
+
+
 # ----------------------- Live (WebSocket) presence ----------------------
 class ConnectionManager:
     """Tracks websocket connections per project and broadcasts events."""
@@ -603,6 +631,12 @@ async def invite_collaborator(project_id: str, payload: InviteRequest, user: Use
     await _log_activity(project_id, actor={"user_id": user.user_id, "name": user.name, "email": user.email},
                         event_type="member.invited",
                         detail=f"Invited {email} as {member['role']}")
+    # In-app notification for the invitee (if they already have an account)
+    await _notify_by_email(email, kind="invite",
+                           title=f"{user.name or user.email} invited you to {project['name']}",
+                           body=f"Role: {member['role']}",
+                           project_id=project_id,
+                           link=f"/project/{project_id}")
     # Fire-and-forget invite email
     invite_link = f"{APP_URL}/project/{project_id}"
     html = f"""
@@ -971,12 +1005,150 @@ async def save_file(project_id: str, payload: FileSave, user: User = Depends(get
             "updated_by": user.user_id,
             "updated_by_name": user.name,
         })
+    # Snapshot for history / rollback
+    await _snapshot_file_version(project_id, payload.path, payload.content,
+                                 user, source="user")
     await _log_activity(project_id,
                         actor={"user_id": user.user_id, "name": user.name, "email": user.email},
                         event_type="file.edited",
                         detail=payload.path)
     doc = await db.project_files.find_one({"project_id": project_id, "path": payload.path}, {"_id": 0})
     return doc
+
+
+# ----------------------- File history / rollback / diff ----------------------
+async def _snapshot_file_version(project_id: str, path: str, content: str,
+                                 user: User, source: str = "user",
+                                 turn_id: Optional[str] = None):
+    """Append a new version row. Idempotent by-content — skip if last version is identical."""
+    last = await db.project_file_versions.find_one(
+        {"project_id": project_id, "path": path},
+        sort=[("created_at", -1)], projection={"_id": 0, "content": 1},
+    )
+    if last and last.get("content") == content:
+        return None
+    doc = {
+        "version_id": f"ver_{uuid.uuid4().hex[:12]}",
+        "project_id": project_id,
+        "path": path.lstrip("/"),
+        "content": content,
+        "changed_by_user_id": user.user_id,
+        "changed_by_name": user.name,
+        "source": source,  # "user" | "ai" | "agent"
+        "turn_id": turn_id,
+        "bytes": len(content),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.project_file_versions.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/projects/{project_id}/files/history")
+async def list_file_history(project_id: str, path: Optional[str] = None,
+                            user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    q: dict = {"project_id": project_id}
+    if path:
+        q["path"] = path.lstrip("/")
+    rows = await db.project_file_versions.find(
+        q, {"_id": 0, "content": 0}  # omit large content field in list view
+    ).sort("created_at", -1).to_list(300)
+    return rows
+
+
+@api_router.get("/projects/{project_id}/files/version/{version_id}")
+async def get_file_version(project_id: str, version_id: str,
+                           user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    v = await db.project_file_versions.find_one(
+        {"project_id": project_id, "version_id": version_id}, {"_id": 0}
+    )
+    if not v:
+        raise HTTPException(status_code=404, detail="Version not found")
+    return v
+
+
+@api_router.get("/projects/{project_id}/files/diff")
+async def diff_file_versions(project_id: str, path: str,
+                             a: Optional[str] = None, b: Optional[str] = None,
+                             user: User = Depends(get_current_user)):
+    """Unified diff between two versions. `a` = older, `b` = newer.
+    If `a` omitted → previous version. If `b` omitted → current file."""
+    import difflib
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    path_n = path.lstrip("/")
+
+    async def _resolve(version_id: Optional[str], fallback_current: bool = False):
+        if version_id:
+            v = await db.project_file_versions.find_one(
+                {"project_id": project_id, "version_id": version_id, "path": path_n}, {"_id": 0})
+            return (v or {}).get("content", ""), (v or {}).get("created_at", "")
+        if fallback_current:
+            cur = await db.project_files.find_one(
+                {"project_id": project_id, "path": path_n}, {"_id": 0})
+            return (cur or {}).get("content", ""), (cur or {}).get("updated_at", "")
+        # Previous version
+        versions = await db.project_file_versions.find(
+            {"project_id": project_id, "path": path_n}, {"_id": 0}
+        ).sort("created_at", -1).to_list(2)
+        if len(versions) >= 2:
+            return versions[1].get("content", ""), versions[1].get("created_at", "")
+        return "", ""
+
+    a_content, a_ts = await _resolve(a)
+    b_content, b_ts = await _resolve(b, fallback_current=True)
+    diff_lines = list(difflib.unified_diff(
+        a_content.splitlines(keepends=True),
+        b_content.splitlines(keepends=True),
+        fromfile=f"{path_n}@{a_ts or 'before'}",
+        tofile=f"{path_n}@{b_ts or 'now'}",
+        n=3,
+    ))
+    return {"path": path_n, "diff": "".join(diff_lines),
+            "a_bytes": len(a_content), "b_bytes": len(b_content)}
+
+
+class RestoreRequest(BaseModel):
+    version_id: str
+
+
+@api_router.post("/projects/{project_id}/files/restore")
+async def restore_file_version(project_id: str, payload: RestoreRequest,
+                               user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("member_role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot restore")
+    v = await db.project_file_versions.find_one(
+        {"project_id": project_id, "version_id": payload.version_id}, {"_id": 0}
+    )
+    if not v:
+        raise HTTPException(status_code=404, detail="Version not found")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.project_files.update_one(
+        {"project_id": project_id, "path": v["path"]},
+        {"$set": {"content": v["content"], "updated_at": now,
+                  "updated_by": user.user_id, "updated_by_name": user.name},
+         "$setOnInsert": {"file_id": f"file_{uuid.uuid4().hex[:10]}",
+                          "project_id": project_id, "path": v["path"]}},
+        upsert=True,
+    )
+    # The restore itself creates a new version (forward history, not a DAG)
+    await _snapshot_file_version(project_id, v["path"], v["content"], user,
+                                 source="restore")
+    await _log_activity(project_id,
+                        actor={"user_id": user.user_id, "name": user.name, "email": user.email},
+                        event_type="file.restored",
+                        detail=f"{v['path']} → {v['version_id']}")
+    return {"restored": True, "path": v["path"], "from_version": v["version_id"]}
 
 
 # ----------------------- Yjs Relay WebSocket ----------------------
@@ -1593,6 +1765,10 @@ async def github_push(project_id: str, payload: GitHubPushRequest,
                         event_type="deploy.github",
                         detail=f"Pushed {len(files)} files to {owner}/{repo_name}",
                         meta={"html_url": html_url})
+    await _notify(user.user_id, kind="push",
+                  title=f"Pushed to GitHub: {owner}/{repo_name}",
+                  body=f"{len(files)} files committed",
+                  project_id=project_id, link=html_url)
     return {"ok": True, "repo_url": html_url, "owner": owner, "repo": repo_name,
             "files_pushed": len(files), "commit_sha": new_commit_sha}
 
@@ -1645,6 +1821,10 @@ async def vercel_deploy(project_id: str, payload: VercelDeployRequest,
                         event_type="deploy.vercel",
                         detail=f"Deployed {len(files)} files to Vercel",
                         meta={"url": url, "deployment_id": data.get("id")})
+    await _notify(user.user_id, kind="deploy",
+                  title="Deployed to Vercel",
+                  body=f"{len(files)} files · {url or '(url pending)'}",
+                  project_id=project_id, link=url)
     return {"ok": True, "provider": "vercel", "url": url,
             "deployment_id": data.get("id"), "files_deployed": len(files),
             "status": data.get("readyState") or data.get("status")}
@@ -1714,6 +1894,10 @@ async def netlify_deploy(project_id: str, payload: NetlifyDeployRequest,
                         event_type="deploy.netlify",
                         detail=f"Deployed {len(files)} files to Netlify",
                         meta={"url": deploy_url, "site_id": site_id, "deploy_id": deploy_doc.get("id")})
+    await _notify(user.user_id, kind="deploy",
+                  title="Deployed to Netlify",
+                  body=f"{len(files)} files · {deploy_url or '(url pending)'}",
+                  project_id=project_id, link=deploy_url)
     return {"ok": True, "provider": "netlify", "url": deploy_url,
             "site_id": site_id, "deploy_id": deploy_doc.get("id"),
             "state": deploy_doc.get("state"), "files_deployed": len(files)}
@@ -1768,6 +1952,7 @@ async def _execute_agent_tool(project_id: str, user: User, tc: dict) -> dict:
                                   "project_id": project_id, "path": path}},
                 upsert=True,
             )
+            await _snapshot_file_version(project_id, path, body, user, source="agent")
             await _log_activity(project_id,
                                 actor={"user_id": user.user_id, "name": user.name, "email": user.email},
                                 event_type="file.edited",
@@ -1823,6 +2008,10 @@ async def review_project(project_id: str, user: User = Depends(get_current_user)
                         actor={"user_id": user.user_id, "name": user.name, "email": user.email},
                         event_type="code.reviewed",
                         detail=f"Reviewed {len(files)} files")
+    await _notify(user.user_id, kind="review",
+                  title=f"Review complete — {project['name']}",
+                  body=review[:220] if review else f"{len(files)} files reviewed",
+                  project_id=project_id, link=f"/project/{project_id}")
     return {"review": review, "files_reviewed": len(files)}
 
 
@@ -1849,6 +2038,155 @@ async def update_memory(project_id: str, payload: MemoryUpdate, user: User = Dep
         raise HTTPException(status_code=403, detail="Viewers cannot edit memory")
     await _set_project_memory(project_id, payload.content or "")
     return await get_memory(project_id, user)
+
+
+# ----------------------- Notifications API ----------------------
+@api_router.get("/notifications")
+async def list_notifications(user: User = Depends(get_current_user), limit: int = 50):
+    rows = await db.notifications.find(
+        {"user_id": user.user_id}, {"_id": 0}
+    ).sort("created_at", -1).to_list(max(1, min(limit, 200)))
+    unread = await db.notifications.count_documents(
+        {"user_id": user.user_id, "read": False})
+    return {"notifications": rows, "unread": unread}
+
+
+class NotificationReadRequest(BaseModel):
+    ids: Optional[List[str]] = None  # specific ids, or null for "mark all"
+
+
+@api_router.post("/notifications/read")
+async def mark_notifications_read(payload: NotificationReadRequest,
+                                  user: User = Depends(get_current_user)):
+    q: dict = {"user_id": user.user_id}
+    if payload.ids:
+        q["notification_id"] = {"$in": payload.ids}
+    res = await db.notifications.update_many(q, {"$set": {"read": True}})
+    return {"marked": res.modified_count}
+
+
+# ----------------------- Multi-agent orchestration (P2) ----------------------
+MULTI_AGENT_PLANNER_SUFFIX = """
+
+## SUB-AGENT ROLE: PLANNER
+Your sole job this turn is to produce a crisp, reviewable PLAN.
+Strictly follow the Plan-mode output format (Goal / Approach / File plan / Risks / Out of scope).
+Do NOT write code. The next sub-agent (Coder) will implement your plan.
+"""
+
+MULTI_AGENT_CODER_SUFFIX = """
+
+## SUB-AGENT ROLE: CODER
+A peer planner just produced the plan below. Your job: implement it exactly — no scope creep.
+Output code in fenced markdown blocks with `lang:path` tags (e.g. ```jsx:frontend/src/App.js```).
+Reference the plan but DO NOT re-print it.
+"""
+
+MULTI_AGENT_REVIEWER_SUFFIX = """
+
+## SUB-AGENT ROLE: REVIEWER
+The Coder just wrote the code above. Grade it against the standard rubric (correctness, security, conventions, maintainability, UX).
+Be tough but constructive — output the Review format (Wins / Issues ranked / Suggested next actions).
+"""
+
+
+@api_router.post("/projects/{project_id}/multi-agent/stream")
+async def multi_agent_stream(project_id: str, payload: ChatRequest,
+                             user: User = Depends(get_current_user)):
+    """Orchestrate planner → coder → reviewer as three sequential LLM calls.
+    Streams SSE events: phase_start (x3), token, phase_end (x3), done.
+    Persists ONE assistant message combining all three sections + metadata."""
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("member_role") == "viewer":
+        raise HTTPException(status_code=403, detail="Viewers cannot send messages")
+    if user.credits < 3:
+        raise HTTPException(status_code=402, detail="Multi-agent requires 3 credits")
+
+    # Persist user message
+    user_msg = Message(project_id=project_id, role="user", content=payload.content)
+    user_doc = user_msg.model_dump()
+    user_doc["created_at"] = user_doc["created_at"].isoformat()
+    await db.messages.insert_one(user_doc)
+    user_doc.pop("_id", None)
+
+    async def event_gen():
+        yield f"event: user\ndata: {json.dumps(user_doc)}\n\n"
+
+        usettings = await _get_user_settings(user.user_id)
+        api_key, provider, model_id = _resolve_chat_model(usettings)
+        memory = await _get_project_memory(project_id)
+        base_sys = _effective_system_prompt(usettings, mode="build", memory=memory)
+
+        phases = [
+            ("planner",  base_sys + MULTI_AGENT_PLANNER_SUFFIX,  payload.content),
+            ("coder",    base_sys + MULTI_AGENT_CODER_SUFFIX,    None),  # fills in
+            ("reviewer", base_sys + MULTI_AGENT_REVIEWER_SUFFIX, None),
+        ]
+        combined_parts: list[str] = []
+        plan_text = ""
+        code_text = ""
+
+        for phase_name, sys_msg, prompt_override in phases:
+            yield f"event: phase_start\ndata: {json.dumps({'phase': phase_name})}\n\n"
+            try:
+                prompt = prompt_override
+                if phase_name == "coder":
+                    prompt = f"User asked: {payload.content}\n\nPlanner's plan:\n{plan_text}\n\nImplement it now."
+                elif phase_name == "reviewer":
+                    prompt = f"User asked: {payload.content}\n\nCode from Coder:\n{code_text[:12000]}\n\nReview."
+                chat_client = LlmChat(
+                    api_key=api_key,
+                    session_id=f"{project_id}:multi:{phase_name}",
+                    system_message=sys_msg,
+                ).with_model(provider, model_id)
+                reply = await chat_client.send_message(UserMessage(text=prompt))
+            except Exception as e:
+                logging.exception(f"multi-agent {phase_name} error")
+                reply = f"[{phase_name} error] {str(e)[:160]}"
+
+            if phase_name == "planner":
+                plan_text = reply
+            elif phase_name == "coder":
+                code_text = reply
+
+            section_header = {"planner": "## 📐 Plan", "coder": "## 🔨 Build", "reviewer": "## 🔍 Review"}[phase_name]
+            combined_parts.append(f"{section_header}\n\n{reply}")
+
+            # Stream tokens of this phase
+            for tok in re.findall(r"\s+|\S+", reply):
+                yield f"event: token\ndata: {json.dumps({'t': tok, 'phase': phase_name})}\n\n"
+                await asyncio.sleep(0.006)
+            yield f"event: phase_end\ndata: {json.dumps({'phase': phase_name, 'chars': len(reply)})}\n\n"
+
+        final = "\n\n---\n\n".join(combined_parts)
+        # Persist single assistant message
+        ai_msg = Message(project_id=project_id, role="assistant", content=final)
+        ai_doc = ai_msg.model_dump()
+        ai_doc["created_at"] = ai_doc["created_at"].isoformat()
+        ai_doc["mode"] = "multi"
+        await db.messages.insert_one(ai_doc)
+        ai_doc.pop("_id", None)
+
+        await db.users.update_one({"user_id": user.user_id}, {"$inc": {"credits": -3}})
+        await db.projects.update_one(
+            {"project_id": project_id},
+            {"$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        sender = {"user_id": user.user_id, "name": user.name, "email": user.email, "picture": user.picture}
+        await manager.broadcast(project_id, {"type": "message", "message": user_doc, "sender": sender})
+        await manager.broadcast(project_id, {"type": "message", "message": ai_doc, "sender": {"user_id": "forge", "name": "Forge"}})
+        await _log_activity(project_id, actor=sender, event_type="multi_agent.run",
+                            detail="planner + coder + reviewer")
+        asyncio.create_task(_auto_update_memory(
+            project_id, payload.content, final, api_key, provider, model_id))
+
+        yield f"event: done\ndata: {json.dumps({'message': ai_doc})}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no",
+    })
 
 
 # ----------------------- Templates ----------------------

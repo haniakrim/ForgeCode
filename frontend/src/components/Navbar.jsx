@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { Coins, LogOut, Sparkles, Moon, Sun } from "lucide-react";
+import { NotificationBell } from "./NotificationBell";
 
 export const Navbar = ({ variant = "app" }) => {
   const { user, logout, login } = useAuth();
@@ -63,6 +64,7 @@ export const Navbar = ({ variant = "app" }) => {
                   <Coins className="h-3.5 w-3.5 text-[var(--brand)]" strokeWidth={1.8} />
                   <span className="mono">{user.credits}</span>
                 </div>
+                <NotificationBell />
                 <button onClick={logout} data-testid="logout-btn" className="btn btn-ghost !py-1.5 !px-3">
                   <LogOut className="h-3.5 w-3.5" strokeWidth={1.8} />
                   <span className="hidden md:inline">Logout</span>

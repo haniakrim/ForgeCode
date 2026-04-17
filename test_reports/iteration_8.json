@@ -1,0 +1,99 @@
+{
+  "summary": "Completed comprehensive backend testing of FORGE v9 P1/P2 features: ① File history/versioning/diff/rollback, ② In-app notifications, ③ Multi-agent orchestration (planner→coder→reviewer), ④ Agent write_file creates version with source='agent'. All 32 v9 tests passed + 27 v8 regression tests + 29 v7 regression tests = 88 total tests passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_forge_v9_p1p2_features.py",
+    "/app/test_reports/pytest/pytest_v9_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "File versioning: PUT /files creates version in project_file_versions collection with source='user'",
+    "Idempotent by content: Identical content back-to-back does NOT create duplicate version",
+    "History endpoint: GET /files/history returns versions newest first, filters by path correctly",
+    "Version detail: GET /files/version/{id} returns full doc including content",
+    "Diff endpoint: GET /files/diff returns unified diff between versions (default: previous vs current)",
+    "Specific version diff: GET /files/diff?a=v1&b=v2 returns diff between specific versions",
+    "Restore: POST /files/restore copies version content back and creates new version with source='restore'",
+    "Restore permissions: Viewer role correctly blocked with 403, unknown version returns 404",
+    "Notifications: GET /notifications returns {notifications: [], unread: 0} for fresh user",
+    "Invite notification: POST /invite creates notification for invitee (if user exists)",
+    "Review notification: POST /review creates notification with kind='review'",
+    "Mark read: POST /notifications/read with {ids: []} marks specific, {ids: null} marks all",
+    "Auth required: Notification endpoints return 401 without session",
+    "Multi-agent: POST /multi-agent/stream streams phase_start/phase_end for planner, coder, reviewer",
+    "Multi-agent credits: Debits 3 credits, returns 402 when < 3 credits",
+    "Multi-agent message: Persists ONE assistant message with mode='multi' containing Plan/Build/Review sections",
+    "Multi-agent permissions: Viewer role blocked with 403",
+    "Agent versioning: Agent write_file tool creates version with source='agent'"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_forge_v9_p1p2_features.py"
+  ],
+  "success_rate": {
+    "backend": "100% (32/32 v9 tests + 27/27 v8 regression + 29/29 v7 regression = 88/88 total)"
+  },
+  "test_credentials": {
+    "v9_owner_token": "test_session_v9_owner_<timestamp>",
+    "v9_viewer_token": "test_session_v9_viewer_<timestamp>",
+    "v9_invitee_token": "test_session_v9_invitee_<timestamp>",
+    "v9_low_credits_token": "test_session_v9_lowcredits_<timestamp>",
+    "v9_project_id": "prj_test_v9_<timestamp>",
+    "note": "Test data seeded via mongosh fixture in test file"
+  },
+  "seed_data_creation": "Created test users (owner, viewer, invitee, low-credits) + sessions + project + project_members via mongosh for authenticated endpoint testing",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "v9 P1/P2 features fully tested: (1) File history - PUT /files creates versions, idempotent by content, GET /files/history returns newest first with path filter, GET /files/version/{id} returns full content, GET /files/diff returns unified diff, POST /files/restore copies content back and creates source='restore' version. (2) Notifications - GET /notifications returns list+unread count, POST /invite creates invite notification for invitee, POST /review creates review notification, POST /notifications/read marks specific or all read, 401 without auth. (3) Multi-agent - POST /multi-agent/stream streams 3 phases (planner/coder/reviewer), debits 3 credits, returns 402 if <3 credits, persists ONE message with mode='multi' containing Plan/Build/Review sections, viewer blocked with 403. (4) Agent write_file creates version with source='agent'. All v7/v8 regression tests still pass.",
+  "features_tested": {
+    "backend": [
+      "PUT /api/projects/{id}/files creates version in project_file_versions",
+      "PUT /api/projects/{id}/files twice with DIFFERENT content creates 2 versions",
+      "PUT /api/projects/{id}/files with IDENTICAL content does NOT create duplicate (idempotent)",
+      "GET /api/projects/{id}/files/history returns all versions newest first",
+      "GET /api/projects/{id}/files/history?path=X filters to that path only",
+      "GET /api/projects/{id}/files/version/{version_id} returns full doc with content",
+      "GET /api/projects/{id}/files/diff?path=X returns unified diff (default: previous vs current)",
+      "GET /api/projects/{id}/files/diff?path=X&a=v1&b=v2 returns diff between specific versions",
+      "POST /api/projects/{id}/files/restore copies version content back, creates source='restore' version",
+      "POST /api/projects/{id}/files/restore as viewer → 403",
+      "POST /api/projects/{id}/files/restore with unknown version_id → 404",
+      "GET /api/notifications returns {notifications: [], unread: 0} for fresh user",
+      "POST /api/projects/{id}/invite creates notification for invitee (if user exists)",
+      "POST /api/projects/{id}/review creates notification with kind='review'",
+      "POST /api/notifications/read with {ids: [id1, id2]} marks those read",
+      "POST /api/notifications/read with {ids: null} marks all read",
+      "Notification endpoints require auth — 401 without session",
+      "POST /api/projects/{id}/multi-agent/stream streams phase_start/phase_end for 3 phases",
+      "Multi-agent debits 3 credits from user",
+      "Multi-agent returns 402 when user has < 3 credits",
+      "Multi-agent persists ONE assistant message with mode='multi'",
+      "Multi-agent message contains Plan, Build, Review sections",
+      "Multi-agent as viewer → 403",
+      "Agent write_file tool creates version with source='agent'",
+      "REGRESSION: Chat stream still works",
+      "REGRESSION: GET /api/models returns 7 models",
+      "REGRESSION: GET /api/settings works",
+      "REGRESSION: GET /api/payments/packages works",
+      "REGRESSION: Project CRUD works",
+      "REGRESSION: Memory GET/PUT works",
+      "REGRESSION: Export endpoint works",
+      "REGRESSION: Activity endpoint works"
+    ]
+  },
+  "mocked_apis": {
+    "none": "No mocking - all LLM calls are real via EMERGENT_LLM_KEY through emergentintegrations"
+  },
+  "known_issues": {
+    "from_previous_iterations": {
+      "emergentintegrations_library_bug": "get_checkout_status() fails with Pydantic validation error - checkout creation works, status polling returns 502"
+    }
+  }
+}
