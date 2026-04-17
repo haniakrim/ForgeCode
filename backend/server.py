@@ -31,6 +31,20 @@ try:
 except ImportError:
     resend = None
 
+# ----------------------- Supported LLM models -----------------------
+# provider/model strings must exactly match emergentintegrations availability.
+SUPPORTED_MODELS = [
+    {"id": "claude-sonnet-4-5-20250929", "provider": "anthropic", "label": "Claude Sonnet 4.5",   "family": "anthropic", "recommended": True},
+    {"id": "claude-haiku-4-5-20251001",  "provider": "anthropic", "label": "Claude Haiku 4.5",    "family": "anthropic"},
+    {"id": "claude-opus-4-5-20251101",   "provider": "anthropic", "label": "Claude Opus 4.5",     "family": "anthropic"},
+    {"id": "gpt-5.2",                    "provider": "openai",    "label": "GPT-5.2",             "family": "openai"},
+    {"id": "gpt-4o-mini",                "provider": "openai",    "label": "GPT-4o mini",         "family": "openai"},
+    {"id": "gemini-3.1-pro-preview",     "provider": "gemini",    "label": "Gemini 3 Pro",        "family": "gemini"},
+    {"id": "gemini-3-flash-preview",     "provider": "gemini",    "label": "Gemini 3 Flash",      "family": "gemini"},
+]
+DEFAULT_MODEL_ID = "claude-sonnet-4-5-20250929"
+_MODEL_LOOKUP = {m["id"]: m for m in SUPPORTED_MODELS}
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
@@ -206,6 +220,35 @@ When the user describes an app idea:
 4. Keep responses focused — do NOT regenerate unchanged files.
 
 Use Tailwind CSS, shadcn/ui components, and lucide-react icons on frontend. Use FastAPI + motor + pydantic on backend. Always prefix backend routes with /api."""
+
+
+async def _get_user_settings(user_id: str) -> dict:
+    """Return user settings with safe defaults if none stored."""
+    s = await db.user_settings.find_one({"user_id": user_id}, {"_id": 0}) or {}
+    return {
+        "model_id": s.get("model_id", DEFAULT_MODEL_ID),
+        "system_prompt": s.get("system_prompt", ""),  # empty = use FORGE default
+        "byo_keys": s.get("byo_keys", {}),  # {"openai": "sk-...", "anthropic": "...", "gemini": "..."}
+        "github": s.get("github", {}),      # {"token": "...", "username": "..."}
+        "vercel": s.get("vercel", {}),
+        "netlify": s.get("netlify", {}),
+    }
+
+
+def _resolve_chat_model(settings: dict) -> tuple[str, str, str]:
+    """Given user_settings, return (api_key, provider, model_id)."""
+    model_id = settings.get("model_id") or DEFAULT_MODEL_ID
+    m = _MODEL_LOOKUP.get(model_id) or _MODEL_LOOKUP[DEFAULT_MODEL_ID]
+    provider = m["provider"]
+    # If user brought their own key for this provider, use it; otherwise fall back to Emergent key.
+    byo = (settings.get("byo_keys") or {}).get(provider)
+    api_key = byo or EMERGENT_LLM_KEY
+    return api_key, provider, m["id"]
+
+
+def _effective_system_prompt(settings: dict) -> str:
+    custom = (settings.get("system_prompt") or "").strip()
+    return custom or SYSTEM_PROMPT
 
 
 async def get_current_user(request: Request) -> User:
@@ -500,11 +543,14 @@ async def chat(project_id: str, payload: ChatRequest, user: User = Depends(get_c
     history = await history_cursor.to_list(200)
 
     try:
+        usettings = await _get_user_settings(user.user_id)
+        api_key, provider, model_id = _resolve_chat_model(usettings)
+        sys_msg = _effective_system_prompt(usettings)
         chat_client = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
+            api_key=api_key,
             session_id=project_id,
-            system_message=SYSTEM_PROMPT,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+            system_message=sys_msg,
+        ).with_model(provider, model_id)
 
         # Re-inject all prior messages so the session sees full context
         # LlmChat uses session_id internally but we send current turn fresh.
@@ -574,11 +620,14 @@ async def chat_stream(project_id: str, payload: ChatRequest, user: User = Depend
             history_cursor = db.messages.find({"project_id": project_id}, {"_id": 0}).sort("created_at", 1)
             history = await history_cursor.to_list(200)
 
+            usettings = await _get_user_settings(user.user_id)
+            api_key, provider, model_id = _resolve_chat_model(usettings)
+            sys_msg = _effective_system_prompt(usettings)
             chat_client = LlmChat(
-                api_key=EMERGENT_LLM_KEY,
+                api_key=api_key,
                 session_id=project_id,
-                system_message=SYSTEM_PROMPT,
-            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+                system_message=sys_msg,
+            ).with_model(provider, model_id)
 
             prompt = payload.content
             if len([m for m in history if m["role"] == "user"]) <= 1:
@@ -995,6 +1044,500 @@ async def stripe_webhook(request: Request):
                           "status": "completed"}},
             )
     return {"received": True}
+
+
+# ----------------------- User settings (model + system prompt + BYO keys) ----------
+class SettingsUpdate(BaseModel):
+    model_id: Optional[str] = None
+    system_prompt: Optional[str] = None
+    byo_keys: Optional[dict] = None  # {"openai": "...", "anthropic": "...", "gemini": "..."}
+
+
+@api_router.get("/models")
+async def list_models():
+    return [{"id": m["id"], "label": m["label"], "provider": m["provider"],
+             "family": m["family"], "recommended": m.get("recommended", False)}
+            for m in SUPPORTED_MODELS]
+
+
+@api_router.get("/settings")
+async def get_settings(user: User = Depends(get_current_user)):
+    s = await _get_user_settings(user.user_id)
+    # Redact stored tokens — return only connected status + public identity.
+    def _integration_status(obj: dict, id_key: str) -> dict:
+        if not obj or not obj.get("token"):
+            return {"connected": False}
+        return {"connected": True, "identity": obj.get(id_key, "")}
+
+    return {
+        "model_id": s["model_id"],
+        "system_prompt": s["system_prompt"],
+        "byo_keys": {k: bool(v) for k, v in (s.get("byo_keys") or {}).items()},
+        "integrations": {
+            "github": _integration_status(s.get("github") or {}, "username"),
+            "vercel": _integration_status(s.get("vercel") or {}, "username"),
+            "netlify": _integration_status(s.get("netlify") or {}, "email"),
+        },
+    }
+
+
+@api_router.put("/settings")
+async def update_settings(payload: SettingsUpdate, user: User = Depends(get_current_user)):
+    updates: dict = {}
+    if payload.model_id is not None:
+        if payload.model_id not in _MODEL_LOOKUP:
+            raise HTTPException(status_code=400, detail="Unknown model_id")
+        updates["model_id"] = payload.model_id
+    if payload.system_prompt is not None:
+        if len(payload.system_prompt) > 8000:
+            raise HTTPException(status_code=400, detail="System prompt too long (max 8000 chars)")
+        updates["system_prompt"] = payload.system_prompt
+    if payload.byo_keys is not None:
+        # Merge into existing byo_keys; empty string ⇒ unset.
+        existing = (await db.user_settings.find_one({"user_id": user.user_id}, {"_id": 0}) or {}).get("byo_keys", {})
+        for k, v in payload.byo_keys.items():
+            if k not in ("openai", "anthropic", "gemini"):
+                continue
+            if v == "":
+                existing.pop(k, None)
+            else:
+                existing[k] = v
+        updates["byo_keys"] = existing
+    if not updates:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.user_settings.update_one(
+        {"user_id": user.user_id},
+        {"$set": updates, "$setOnInsert": {"user_id": user.user_id,
+                                             "created_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return await get_settings(user)
+
+
+# ----------------------- Integrations: GitHub / Vercel / Netlify ----------
+class ConnectTokenRequest(BaseModel):
+    token: str
+
+
+GITHUB_OAUTH_CLIENT_ID = os.environ.get("GITHUB_OAUTH_CLIENT_ID", "")
+GITHUB_OAUTH_CLIENT_SECRET = os.environ.get("GITHUB_OAUTH_CLIENT_SECRET", "")
+GITHUB_OAUTH_REDIRECT_URI = os.environ.get("GITHUB_OAUTH_REDIRECT_URI", f"{APP_URL}/settings?gh=callback")
+
+
+async def _store_integration(user_id: str, provider: str, data: dict):
+    await db.user_settings.update_one(
+        {"user_id": user_id},
+        {"$set": {provider: data, "updated_at": datetime.now(timezone.utc).isoformat()},
+         "$setOnInsert": {"user_id": user_id,
+                          "created_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+
+
+async def _clear_integration(user_id: str, provider: str):
+    await db.user_settings.update_one(
+        {"user_id": user_id},
+        {"$unset": {provider: ""},
+         "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+
+
+# ---- GitHub: PAT connect ----
+@api_router.post("/integrations/github/connect")
+async def github_connect(payload: ConnectTokenRequest, user: User = Depends(get_current_user)):
+    token = (payload.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Missing token")
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        r = await http.get("https://api.github.com/user", headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        })
+    if r.status_code != 200:
+        raise HTTPException(status_code=401, detail="GitHub token rejected")
+    gh = r.json()
+    await _store_integration(user.user_id, "github", {
+        "token": token, "username": gh.get("login", ""),
+        "github_id": gh.get("id"), "avatar_url": gh.get("avatar_url"),
+        "connected_at": datetime.now(timezone.utc).isoformat(),
+        "auth_method": "pat",
+    })
+    return {"connected": True, "username": gh.get("login"), "avatar_url": gh.get("avatar_url")}
+
+
+# ---- GitHub: OAuth app start + callback ----
+@api_router.get("/integrations/github/oauth/start")
+async def github_oauth_start(user: User = Depends(get_current_user)):
+    if not GITHUB_OAUTH_CLIENT_ID:
+        raise HTTPException(status_code=501, detail="GitHub OAuth App not configured on this instance")
+    state = uuid.uuid4().hex
+    await db.user_settings.update_one(
+        {"user_id": user.user_id},
+        {"$set": {"github_oauth_state": state}, "$setOnInsert": {"user_id": user.user_id}},
+        upsert=True,
+    )
+    url = ("https://github.com/login/oauth/authorize"
+           f"?client_id={GITHUB_OAUTH_CLIENT_ID}"
+           f"&redirect_uri={GITHUB_OAUTH_REDIRECT_URI}"
+           f"&scope=repo%20user"
+           f"&state={state}")
+    return {"authorization_url": url}
+
+
+class GitHubOAuthCallback(BaseModel):
+    code: str
+    state: str
+
+
+@api_router.post("/integrations/github/oauth/callback")
+async def github_oauth_callback(payload: GitHubOAuthCallback, user: User = Depends(get_current_user)):
+    if not (GITHUB_OAUTH_CLIENT_ID and GITHUB_OAUTH_CLIENT_SECRET):
+        raise HTTPException(status_code=501, detail="GitHub OAuth App not configured on this instance")
+    s = await db.user_settings.find_one({"user_id": user.user_id}, {"_id": 0}) or {}
+    if s.get("github_oauth_state") != payload.state:
+        raise HTTPException(status_code=400, detail="State mismatch")
+
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        tok_resp = await http.post(
+            "https://github.com/login/oauth/access_token",
+            json={"client_id": GITHUB_OAUTH_CLIENT_ID,
+                  "client_secret": GITHUB_OAUTH_CLIENT_SECRET,
+                  "code": payload.code,
+                  "redirect_uri": GITHUB_OAUTH_REDIRECT_URI},
+            headers={"Accept": "application/json"},
+        )
+    if tok_resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="OAuth code exchange failed")
+    tok = tok_resp.json()
+    access_token = tok.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=401, detail=tok.get("error_description") or "OAuth token missing")
+
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        me = await http.get("https://api.github.com/user",
+                            headers={"Authorization": f"Bearer {access_token}",
+                                     "Accept": "application/vnd.github+json"})
+    if me.status_code != 200:
+        raise HTTPException(status_code=401, detail="Failed to read GitHub user")
+    gh = me.json()
+    await _store_integration(user.user_id, "github", {
+        "token": access_token, "username": gh.get("login", ""),
+        "github_id": gh.get("id"), "avatar_url": gh.get("avatar_url"),
+        "connected_at": datetime.now(timezone.utc).isoformat(),
+        "auth_method": "oauth",
+    })
+    await db.user_settings.update_one({"user_id": user.user_id}, {"$unset": {"github_oauth_state": ""}})
+    return {"connected": True, "username": gh.get("login"), "avatar_url": gh.get("avatar_url")}
+
+
+# ---- Vercel connect ----
+@api_router.post("/integrations/vercel/connect")
+async def vercel_connect(payload: ConnectTokenRequest, user: User = Depends(get_current_user)):
+    token = (payload.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Missing token")
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        r = await http.get("https://api.vercel.com/v2/user",
+                           headers={"Authorization": f"Bearer {token}"})
+    if r.status_code != 200:
+        raise HTTPException(status_code=401, detail="Vercel token rejected")
+    data = r.json().get("user") or r.json()
+    await _store_integration(user.user_id, "vercel", {
+        "token": token,
+        "username": data.get("username") or data.get("name") or data.get("email", ""),
+        "email": data.get("email", ""),
+        "connected_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"connected": True, "username": data.get("username") or data.get("email")}
+
+
+# ---- Netlify connect ----
+@api_router.post("/integrations/netlify/connect")
+async def netlify_connect(payload: ConnectTokenRequest, user: User = Depends(get_current_user)):
+    token = (payload.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Missing token")
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        r = await http.get("https://api.netlify.com/api/v1/user",
+                           headers={"Authorization": f"Bearer {token}"})
+    if r.status_code != 200:
+        raise HTTPException(status_code=401, detail="Netlify token rejected")
+    data = r.json()
+    await _store_integration(user.user_id, "netlify", {
+        "token": token,
+        "email": data.get("email", ""),
+        "full_name": data.get("full_name", ""),
+        "avatar_url": data.get("avatar_url"),
+        "connected_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"connected": True, "email": data.get("email")}
+
+
+@api_router.delete("/integrations/{provider}")
+async def disconnect_integration(provider: str, user: User = Depends(get_current_user)):
+    if provider not in ("github", "vercel", "netlify"):
+        raise HTTPException(status_code=400, detail="Unknown provider")
+    await _clear_integration(user.user_id, provider)
+    return {"disconnected": True, "provider": provider}
+
+
+# ----------------------- Helper: collect project files ----------------------
+async def _collect_project_files(project_id: str) -> dict[str, str]:
+    """Same file assembly used by export ZIP — assistant code fences,
+    overridden by Monaco-edited project_files."""
+    msgs = await db.messages.find(
+        {"project_id": project_id, "role": "assistant"}, {"_id": 0}
+    ).sort("created_at", 1).to_list(1000)
+    files: dict[str, str] = {}
+    idx = 0
+    for m in msgs:
+        for match in _FENCE_RE.finditer(m.get("content", "")):
+            lang = match.group(1) or "txt"
+            path = match.group(2)
+            body = match.group(3)
+            idx += 1
+            files[_safe_filename(path, idx, lang)] = body
+    edited = await db.project_files.find({"project_id": project_id}, {"_id": 0}).to_list(500)
+    for f in edited:
+        files[f["path"].lstrip("/")] = f["content"]
+    return files
+
+
+def _slugify(name: str, fallback: str = "forge-project") -> str:
+    s = re.sub(r"[^a-z0-9-]+", "-", (name or "").lower()).strip("-")
+    return s or fallback
+
+
+# ----------------------- Deploy: GitHub push ----------------------
+class GitHubPushRequest(BaseModel):
+    repo_name: Optional[str] = None
+    description: Optional[str] = ""
+    private: bool = True
+    commit_message: Optional[str] = "Forge: initial commit"
+
+
+@api_router.post("/projects/{project_id}/github/push")
+async def github_push(project_id: str, payload: GitHubPushRequest,
+                      user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    s = await _get_user_settings(user.user_id)
+    gh = s.get("github") or {}
+    if not gh.get("token"):
+        raise HTTPException(status_code=400, detail="GitHub not connected. Connect via Settings → Integrations.")
+
+    files = await _collect_project_files(project_id)
+    if not files:
+        raise HTTPException(status_code=400, detail="No files to push — generate some code first.")
+
+    repo_name = _slugify(payload.repo_name or project["name"])
+    headers = {
+        "Authorization": f"Bearer {gh['token']}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        # 1. Create repo (auto_init=true so we have a main branch to push onto)
+        cr = await http.post(
+            "https://api.github.com/user/repos",
+            headers=headers,
+            json={"name": repo_name, "description": payload.description or project.get("description", ""),
+                  "private": bool(payload.private), "auto_init": True},
+        )
+        if cr.status_code not in (200, 201):
+            raise HTTPException(status_code=cr.status_code,
+                                detail=f"GitHub repo create failed: {cr.text[:200]}")
+        repo_doc = cr.json()
+        owner = repo_doc["owner"]["login"]
+        html_url = repo_doc["html_url"]
+        default_branch = repo_doc.get("default_branch", "main")
+
+        # 2. Get ref of default branch
+        ref = await http.get(
+            f"https://api.github.com/repos/{owner}/{repo_name}/git/ref/heads/{default_branch}",
+            headers=headers,
+        )
+        if ref.status_code != 200:
+            raise HTTPException(status_code=ref.status_code,
+                                detail=f"GitHub ref fetch failed: {ref.text[:200]}")
+        head_sha = ref.json()["object"]["sha"]
+
+        # 3. Get base tree
+        base_commit = await http.get(
+            f"https://api.github.com/repos/{owner}/{repo_name}/git/commits/{head_sha}",
+            headers=headers,
+        )
+        base_tree_sha = base_commit.json()["tree"]["sha"]
+
+        # 4. Build tree (inline content — GitHub auto-creates blobs)
+        tree_entries = [
+            {"path": path.lstrip("/"), "mode": "100644", "type": "blob", "content": content}
+            for path, content in files.items()
+        ]
+        tree_resp = await http.post(
+            f"https://api.github.com/repos/{owner}/{repo_name}/git/trees",
+            headers=headers,
+            json={"base_tree": base_tree_sha, "tree": tree_entries},
+        )
+        if tree_resp.status_code not in (200, 201):
+            raise HTTPException(status_code=tree_resp.status_code,
+                                detail=f"GitHub tree create failed: {tree_resp.text[:200]}")
+        new_tree_sha = tree_resp.json()["sha"]
+
+        # 5. Create commit
+        commit_resp = await http.post(
+            f"https://api.github.com/repos/{owner}/{repo_name}/git/commits",
+            headers=headers,
+            json={"message": payload.commit_message or "Forge: initial commit",
+                  "tree": new_tree_sha, "parents": [head_sha]},
+        )
+        if commit_resp.status_code not in (200, 201):
+            raise HTTPException(status_code=commit_resp.status_code,
+                                detail=f"GitHub commit failed: {commit_resp.text[:200]}")
+        new_commit_sha = commit_resp.json()["sha"]
+
+        # 6. Update ref
+        upd = await http.patch(
+            f"https://api.github.com/repos/{owner}/{repo_name}/git/refs/heads/{default_branch}",
+            headers=headers,
+            json={"sha": new_commit_sha, "force": False},
+        )
+        if upd.status_code not in (200, 201):
+            raise HTTPException(status_code=upd.status_code,
+                                detail=f"GitHub ref update failed: {upd.text[:200]}")
+
+    await _log_activity(project_id, actor={"user_id": user.user_id, "name": user.name,
+                                            "email": user.email},
+                        event_type="deploy.github",
+                        detail=f"Pushed {len(files)} files to {owner}/{repo_name}",
+                        meta={"html_url": html_url})
+    return {"ok": True, "repo_url": html_url, "owner": owner, "repo": repo_name,
+            "files_pushed": len(files), "commit_sha": new_commit_sha}
+
+
+# ----------------------- Deploy: Vercel ----------------------
+class VercelDeployRequest(BaseModel):
+    name: Optional[str] = None
+    target: Optional[str] = "production"  # "production" | "preview"
+
+
+@api_router.post("/projects/{project_id}/vercel/deploy")
+async def vercel_deploy(project_id: str, payload: VercelDeployRequest,
+                        user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    s = await _get_user_settings(user.user_id)
+    vc = s.get("vercel") or {}
+    if not vc.get("token"):
+        raise HTTPException(status_code=400, detail="Vercel not connected. Connect via Settings → Integrations.")
+
+    files = await _collect_project_files(project_id)
+    if not files:
+        raise HTTPException(status_code=400, detail="No files to deploy — generate some code first.")
+
+    deploy_name = _slugify(payload.name or project["name"])
+    # Vercel v13 deployments: inline files as [{"file": path, "data": content}]
+    vercel_files = [{"file": p.lstrip("/"), "data": c} for p, c in files.items()]
+    body = {
+        "name": deploy_name,
+        "target": payload.target if payload.target in ("production", "preview") else "production",
+        "files": vercel_files,
+        "projectSettings": {"framework": None},
+    }
+    async with httpx.AsyncClient(timeout=60.0) as http:
+        r = await http.post("https://api.vercel.com/v13/deployments",
+                            headers={"Authorization": f"Bearer {vc['token']}",
+                                     "Content-Type": "application/json"},
+                            json=body)
+    if r.status_code not in (200, 201, 202):
+        raise HTTPException(status_code=r.status_code,
+                            detail=f"Vercel deploy failed: {r.text[:400]}")
+    data = r.json()
+    url = data.get("url") or (data.get("alias") or [None])[0]
+    if url and not url.startswith("http"):
+        url = f"https://{url}"
+
+    await _log_activity(project_id, actor={"user_id": user.user_id, "name": user.name,
+                                            "email": user.email},
+                        event_type="deploy.vercel",
+                        detail=f"Deployed {len(files)} files to Vercel",
+                        meta={"url": url, "deployment_id": data.get("id")})
+    return {"ok": True, "provider": "vercel", "url": url,
+            "deployment_id": data.get("id"), "files_deployed": len(files),
+            "status": data.get("readyState") or data.get("status")}
+
+
+# ----------------------- Deploy: Netlify ----------------------
+class NetlifyDeployRequest(BaseModel):
+    site_name: Optional[str] = None
+    existing_site_id: Optional[str] = None
+
+
+@api_router.post("/projects/{project_id}/netlify/deploy")
+async def netlify_deploy(project_id: str, payload: NetlifyDeployRequest,
+                         user: User = Depends(get_current_user)):
+    project = await _user_can_access_project(project_id, user)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    s = await _get_user_settings(user.user_id)
+    nt = s.get("netlify") or {}
+    if not nt.get("token"):
+        raise HTTPException(status_code=400, detail="Netlify not connected. Connect via Settings → Integrations.")
+
+    files = await _collect_project_files(project_id)
+    if not files:
+        raise HTTPException(status_code=400, detail="No files to deploy — generate some code first.")
+
+    headers = {"Authorization": f"Bearer {nt['token']}"}
+    site_id = payload.existing_site_id
+    async with httpx.AsyncClient(timeout=60.0) as http:
+        # 1. Create site if needed
+        if not site_id:
+            name = _slugify(payload.site_name or project["name"])
+            cr = await http.post("https://api.netlify.com/api/v1/sites",
+                                 headers={**headers, "Content-Type": "application/json"},
+                                 json={"name": name})
+            if cr.status_code not in (200, 201):
+                raise HTTPException(status_code=cr.status_code,
+                                    detail=f"Netlify site create failed: {cr.text[:300]}")
+            site_doc = cr.json()
+            site_id = site_doc["id"]
+            site_url = site_doc.get("ssl_url") or site_doc.get("url")
+        else:
+            site_info = await http.get(f"https://api.netlify.com/api/v1/sites/{site_id}", headers=headers)
+            site_url = site_info.json().get("ssl_url") if site_info.status_code == 200 else None
+
+        # 2. Build ZIP in memory
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for path, content in files.items():
+                zf.writestr(path.lstrip("/"), content)
+        buf.seek(0)
+
+        # 3. Direct ZIP deploy: POST binary body with Content-Type: application/zip
+        dr = await http.post(
+            f"https://api.netlify.com/api/v1/sites/{site_id}/deploys",
+            headers={**headers, "Content-Type": "application/zip"},
+            content=buf.getvalue(),
+        )
+    if dr.status_code not in (200, 201):
+        raise HTTPException(status_code=dr.status_code,
+                            detail=f"Netlify deploy failed: {dr.text[:400]}")
+    deploy_doc = dr.json()
+    deploy_url = deploy_doc.get("ssl_url") or deploy_doc.get("deploy_ssl_url") or deploy_doc.get("url") or site_url
+
+    await _log_activity(project_id, actor={"user_id": user.user_id, "name": user.name,
+                                            "email": user.email},
+                        event_type="deploy.netlify",
+                        detail=f"Deployed {len(files)} files to Netlify",
+                        meta={"url": deploy_url, "site_id": site_id, "deploy_id": deploy_doc.get("id")})
+    return {"ok": True, "provider": "netlify", "url": deploy_url,
+            "site_id": site_id, "deploy_id": deploy_doc.get("id"),
+            "state": deploy_doc.get("state"), "files_deployed": len(files)}
 
 
 # ----------------------- Templates ----------------------

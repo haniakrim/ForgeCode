@@ -1,0 +1,84 @@
+{
+  "summary": "Completed comprehensive backend testing of FORGE v7 P1 features: Multi-model picker, User settings, Integration connect/disconnect, Deploy endpoints. All 29 new tests passed + 20 v6 regression tests passed (49 total).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_forge_v7_p1_features.py",
+    "/app/test_reports/pytest/pytest_v7_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "GET /api/models correctly returns 7 models with provider field (anthropic/openai/gemini), claude-sonnet-4-5-20250929 marked as recommended",
+    "GET /api/settings returns proper defaults: model_id=claude-sonnet-4-5-20250929, system_prompt='', byo_keys={}, all integrations disconnected",
+    "PUT /api/settings correctly validates model_id (400 for unknown), system_prompt length (400 for >8000 chars), and stores/clears byo_keys",
+    "Integration connect endpoints (GitHub/Vercel/Netlify) correctly validate tokens against real APIs and return 401 for fake tokens",
+    "DELETE /api/integrations/{provider} returns {disconnected: true} even when not connected, 400 for unknown provider",
+    "Deploy endpoints (github/push, vercel/deploy, netlify/deploy) correctly return 400 with 'not connected' message when integration not set up",
+    "Chat endpoints correctly use _get_user_settings + _resolve_chat_model + _effective_system_prompt - no regression after settings refactor",
+    "All existing features (export ZIP, activity log, invite, Stripe checkout) continue to work correctly"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_forge_v7_p1_features.py"
+  ],
+  "success_rate": {
+    "backend": "100% (29/29 v7 tests + 20/20 v6 regression tests = 49/49 total)"
+  },
+  "test_credentials": {
+    "v7_session_token": "test_session_v7_1776417660866",
+    "v7_user_id": "test-user-v7-1776417660866",
+    "v7_project_id": "prj_test_v7_1776417660866",
+    "note": "Test users cleaned up after testing via pytest fixture"
+  },
+  "seed_data_creation": "Created test user + session + project via mongosh for authenticated endpoint testing",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "v7 P1 features fully tested: (1) GET /api/models returns 7 models with id, label, provider, family, recommended fields. (2) GET /api/settings returns user settings with defaults (model_id=claude-sonnet-4-5-20250929, system_prompt='', byo_keys={}, integrations all {connected: false}). (3) PUT /api/settings validates model_id against SUPPORTED_MODELS (400 for unknown), system_prompt max 8000 chars (400 if exceeded), byo_keys stored and redacted to boolean on GET, empty string clears key. (4) POST /api/integrations/{github,vercel,netlify}/connect validates tokens against real APIs (401 for fake tokens). (5) DELETE /api/integrations/{provider} returns {disconnected: true, provider: X}, 400 for unknown provider. (6) POST /api/projects/{id}/{github/push,vercel/deploy,netlify/deploy} returns 400 with 'not connected' message when integration not set up. (7) Chat endpoints (/chat and /chat/stream) correctly resolve model + system prompt from user_settings with fallback to defaults. (8) All v6 features (activity log, project files, Yjs WS, export, invite) continue to work.",
+  "features_tested": {
+    "backend": [
+      "GET /api/models - returns 7 models",
+      "GET /api/models - each model has provider field (anthropic/openai/gemini)",
+      "GET /api/models - claude-sonnet-4-5-20250929 is recommended",
+      "GET /api/settings - requires auth (401 without)",
+      "GET /api/settings - returns defaults for new user",
+      "PUT /api/settings - valid model_id persists",
+      "PUT /api/settings - invalid model_id returns 400",
+      "PUT /api/settings - valid system_prompt persists",
+      "PUT /api/settings - system_prompt > 8000 chars returns 400",
+      "PUT /api/settings - byo_keys stores key, GET returns redacted (boolean)",
+      "PUT /api/settings - byo_keys empty string clears key",
+      "POST /api/integrations/github/connect - fake token returns 401",
+      "POST /api/integrations/vercel/connect - fake token returns 401",
+      "POST /api/integrations/netlify/connect - fake token returns 401",
+      "POST /api/integrations/github/connect - empty token returns 400",
+      "DELETE /api/integrations/github - returns {disconnected: true}",
+      "DELETE /api/integrations/vercel - returns {disconnected: true}",
+      "DELETE /api/integrations/netlify - returns {disconnected: true}",
+      "DELETE /api/integrations/unknown - returns 400",
+      "POST /api/projects/{id}/github/push - not connected returns 400",
+      "POST /api/projects/{id}/vercel/deploy - not connected returns 400",
+      "POST /api/projects/{id}/netlify/deploy - not connected returns 400",
+      "POST /api/projects/{id}/chat - works with default model (regression)",
+      "POST /api/projects/{id}/chat - respects selected model gpt-5.2 (regression)",
+      "GET /api/projects/{id}/export - works (regression)",
+      "GET /api/projects/{id}/activity - works (regression)",
+      "POST /api/projects/{id}/invite - works (regression)",
+      "GET /api/payments/packages - works (regression)",
+      "POST /api/payments/checkout - works (regression)"
+    ]
+  },
+  "mocked_apis": {
+    "none": "No mocking - backend calls real github.com/api.vercel.com/api.netlify.com for token validation. Fake tokens correctly rejected with 401."
+  },
+  "known_issues": {
+    "from_previous_iterations": {
+      "emergentintegrations_library_bug": "get_checkout_status() fails with Pydantic validation error - checkout creation works, status polling returns 502"
+    }
+  }
+}

@@ -48,6 +48,14 @@ FORGE is an AI full-stack app developer SaaS — a neo-brutalist, developer-focu
 - ✅ Credit system (decrements atomically)
 - ✅ 13/13 backend API tests passing, all frontend flows verified
 
+## Implemented (Feb 17, 2026 — v6: Monaco+Yjs + Resend + Activity + WS Reconnect)
+- ✅ **Monaco editor + Yjs CRDT** — Code tab now uses Monaco (`@monaco-editor/react`) bound to a `Y.Doc` via `y-websocket` + `y-monaco`. Edits sync in real-time between peers via relay at `/api/ws/yjs/{project_id}/{file_path}`. Auto-save debounced (1.5s) to `project_files` collection via `PUT /api/projects/{id}/files`. Peer counter + connection state shown in editor header. Viewers get read-only mode.
+- ✅ **Email notification via Resend** — `resend` package installed. `POST /api/projects/{id}/invite` sends an HTML invite email to the new collaborator. When `RESEND_API_KEY` is missing, `_send_email` gracefully logs `[email mock] →` and returns `{status:"mocked"}`.
+- ✅ **Project activity log** — new `project_activity` collection + `_log_activity()` helper. Auto-logs: `member.invited`, `member.role_changed`, `project.made_public/private`, `file.edited`, `message.sent`. New `GET /api/projects/{id}/activity` endpoint. Owner-only "Activity" button in project header opens `ActivityDialog` with icons, labels, and relative time.
+- ✅ **WS reconnect-with-backoff + offline indicator** — WebSocket hook now auto-reconnects with exponential backoff (1s → 2s → … → 30s cap), resets on successful open. Header chip shows "offline" with `WifiOff` icon when disconnected, pulsing "live" when connected. `StrictMode` was removed since its synthetic double-mount broke long-lived WS connections in dev.
+- ✅ Export ZIP now merges `project_files` edits over AI-generated blocks (latest wins).
+- ✅ 20/20 v6 backend tests passing; all frontend features verified.
+
 ## Implemented (Feb 17, 2026 — v5: Roles + Live Presence + Expanded Sandpack)
 - ✅ **Editor vs Viewer roles** — `project_members.role = editor|viewer`. Viewers are 403-blocked from chat (REST + SSE). Owner-only `PATCH /api/projects/{id}/members/{mid}` to update role. Role-selector dropdown in ShareDialog for invites + existing members.
 - ✅ **Live presence & typing** — WebSocket `/api/ws/projects/{id}` (cookie-authenticated or `?token=`). Tracks connected users per project, broadcasts `presence`, `typing`, and `message` events. Frontend shows avatar stack + "N live" chip + "X is typing…" indicator above composer. Chat messages now appear in real-time across all connected collaborators without polling.

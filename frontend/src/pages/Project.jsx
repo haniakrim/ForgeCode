@@ -3,6 +3,7 @@ import { useNavigate, useParams, Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { ArrowLeft, Send, Loader2, Code2, Eye, FileCode2, Sparkles, Copy, CheckCheck, Download, Share2, Wifi, WifiOff, Activity } from "lucide-react";
+import { DeployMenu } from "../components/DeployMenu";
 import { toast } from "sonner";
 import { ShareDialog } from "../components/ShareDialog";
 import { SandpackPreview } from "../components/SandpackPreview";
@@ -79,6 +80,7 @@ export default function Project() {
   const [wsConnected, setWsConnected] = useState(false);
   const [activity, setActivity] = useState([]);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [modelLabel, setModelLabel] = useState("");
   const scrollRef = useRef(null);
   const wsRef = useRef(null);
   const typingDebounceRef = useRef(null);
@@ -99,6 +101,17 @@ export default function Project() {
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [id]);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [messages]);
+
+  // Fetch user's active model label for the toolbar chip
+  useEffect(() => {
+    (async () => {
+      try {
+        const [s, m] = await Promise.all([api.get("/settings"), api.get("/models")]);
+        const mm = (m.data || []).find((x) => x.id === s.data.model_id);
+        if (mm) setModelLabel(mm.label.toLowerCase());
+      } catch { /* leave empty */ }
+    })();
+  }, []);
 
   // WebSocket: presence + typing + real-time broadcasts + auto-reconnect w/ backoff
   useEffect(() => {
@@ -326,7 +339,7 @@ export default function Project() {
                 <><WifiOff className="h-3 w-3 mr-1" strokeWidth={2} /> offline</>
               )}
             </span>
-            <span className="chip hidden md:inline-flex">claude sonnet 4.5</span>
+            <span className="chip hidden md:inline-flex" data-testid="current-model-chip">{modelLabel || "AI engine"}</span>
             <div className="chip">
               <Sparkles className="h-3 w-3 text-[var(--brand)]" strokeWidth={1.5} />
               {user?.credits} credits
@@ -340,6 +353,7 @@ export default function Project() {
               <Download className="h-3.5 w-3.5" strokeWidth={1.8} />
               <span className="hidden md:inline">Export</span>
             </button>
+            <DeployMenu projectId={id} />
             {isOwner && (
               <button
                 onClick={() => setActivityOpen(true)}
